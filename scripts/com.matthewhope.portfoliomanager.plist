@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.matthewhope.portfoliomanager</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/matthewhope/github_projects/portfolio-manager/.venv/bin/python</string>
+        <string>/Users/matthewhope/github_projects/portfolio-manager/main.py</string>
+        <string>--watch</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/matthewhope/github_projects/portfolio-manager</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/matthewhope/github_projects/portfolio-manager/logs/watcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/matthewhope/github_projects/portfolio-manager/logs/watcher_error.log</string>
+</dict>
+</plist>

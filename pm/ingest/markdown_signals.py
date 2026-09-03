@@ -11,19 +11,20 @@ class MarkdownSignalParser:
     ticker recommendations, dates, and price targets.
     """
 
-    FOLDER_PATTERN = re.compile(r"^([A-Z0-9]+)_(\d{8})_(\d{6})$")
+    FOLDER_PATTERN = re.compile(r"^([A-Z0-9]+)_(\d{8})_(\d{6})")
     RATING_PATTERN = re.compile(r"\*\*(?:Rating|Recommendation)\*\*:\s*([^\n\r*]+)", re.IGNORECASE)
     TARGET_PATTERN = re.compile(r"\*\*Price Target\*\*:\s*([0-9.,]+)", re.IGNORECASE)
     STOP_PATTERN = re.compile(r"\*\*Stop(?:-|\s*)Loss\*\*:\s*([0-9.,]+)", re.IGNORECASE)
 
-    def __init__(self, reports_dir: str, max_age_days: int = 14):
+    def __init__(self, reports_dir: str, max_age_days: int = 14, stale_warning_days: int = 4):
         self.reports_dir = Path(reports_dir)
         self.max_age_days = max_age_days
+        self.stale_warning_days = stale_warning_days
 
     def parse_all_signals(self, as_of_date: Optional[date] = None) -> Dict[str, ParsedSignal]:
         """
         Recursively scans reports_dir, extracts signals from the newest report for each ticker,
-        and marks expiration status based on max_age_days.
+        and marks expiration and approaching stale status.
         """
         if as_of_date is None:
             as_of_date = date.today()
@@ -82,6 +83,8 @@ class MarkdownSignalParser:
 
             age_days = (as_of_date - report_date).days
             is_expired = self.max_age_days > 0 and age_days > self.max_age_days
+            days_remaining = max(0, self.max_age_days - age_days) if self.max_age_days > 0 else 999
+            is_approaching_stale = not is_expired and days_remaining <= self.stale_warning_days
 
             parsed = ParsedSignal(
                 ticker=ticker,
@@ -90,6 +93,9 @@ class MarkdownSignalParser:
                 source_path=str(target_file),
                 target_price=target_price,
                 stop_loss=stop_loss,
+                age_days=age_days,
+                days_remaining=days_remaining,
+                is_approaching_stale=is_approaching_stale,
                 is_expired=is_expired,
                 raw_rating=raw_rating,
             )
@@ -106,7 +112,7 @@ class MarkdownSignalParser:
         # Deduplicate: Select strictly the newest report for each ticker
         final_signals: Dict[str, ParsedSignal] = {}
         for ticker, candidates in signals_by_ticker.items():
-            candidates.sort(key=lambda x: x.date, reverse=True)
+            candidates.sort(key=lambda x: (x.date, not x.is_expired), reverse=True)
             newest = candidates[0]
             final_signals[ticker] = newest
 
@@ -118,10 +124,6 @@ class MarkdownSignalParser:
         signals_by_ticker: Dict[str, List[ParsedSignal]],
         as_of_date: date,
     ):
-        """
-        Parses Markdown table rows in 00_Portfolio_Actions_Dashboard.md
-        e.g.: | **[[AMD]]** | **2026-09-01** | **Overweight** 🟢 | ...
-        """
         table_row_pattern = re.compile(
             r"\|\s*\*{0,2}\[?\[?([A-Z0-9]+)\]?\]?\*{0,2}\s*\|\s*\*{0,2}(\d{4}-\d{2}-\d{2})\*{0,2}\s*\|\s*\*{0,2}([A-Za-z\s→]+?)(?:[🟢🟡🔴🎯]|\*{0,2})\s*\|"
         )
@@ -137,7 +139,6 @@ class MarkdownSignalParser:
             raw_rating = raw_rating.strip()
 
             if ticker in signals_by_ticker and len(signals_by_ticker[ticker]) > 0:
-                # Individual run folder takes precedence if available
                 continue
 
             try:
@@ -148,12 +149,17 @@ class MarkdownSignalParser:
             signal_type = SignalType.from_str(raw_rating)
             age_days = (as_of_date - report_date).days
             is_expired = self.max_age_days > 0 and age_days > self.max_age_days
+            days_remaining = max(0, self.max_age_days - age_days) if self.max_age_days > 0 else 999
+            is_approaching_stale = not is_expired and days_remaining <= self.stale_warning_days
 
             parsed = ParsedSignal(
                 ticker=ticker,
                 signal=signal_type,
                 date=report_date,
                 source_path=str(dashboard_path),
+                age_days=age_days,
+                days_remaining=days_remaining,
+                is_approaching_stale=is_approaching_stale,
                 is_expired=is_expired,
                 raw_rating=raw_rating,
             )

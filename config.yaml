@@ -4,7 +4,9 @@ paths:
   obsidian_vault_dir: "/Users/matthewhope/reports"
 
 signals:
-  max_age_days: 14
+  max_age_days: 14               # Reports older than 14 days are expired
+  stale_warning_days: 4          # Alert if report expires in <= 4 days (i.e. age >= 10 days)
+  candidate_min_signal: "OVERWEIGHT"
 
 risk:
   max_position_weight: 0.15      # Max 15% single position
@@ -25,3 +27,7 @@ rebalance:
   min_dollar_trade: 1500.0       # Minimum trade floor
   prefer_whole_shares: true      # Round standard orders to whole integer shares
   liquidate_avoid: true          # Always fully liquidate 100% on AVOID signals
+
+watcher:
+  poll_interval_seconds: 3       # Check Downloads folder every 3 seconds
+  debounce_seconds: 2            # Wait after file write finishes before running solver

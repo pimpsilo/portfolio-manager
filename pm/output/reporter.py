@@ -18,10 +18,15 @@ class MarkdownTradeReporter:
         exec_date = summary.execution_date.isoformat()
         lines.append(f"# Trade Execution Orders — {exec_date}")
         lines.append("")
-        lines.append(f"> **Portfolio Live Value**: **${summary.total_portfolio_value:,.2f}** | **Current Cash**: **${summary.current_cash:,.2f}** ({summary.current_cash/summary.total_portfolio_value*100:.1f}%) | **Projected Ending Cash**: **${summary.projected_ending_cash:,.2f}** ({summary.projected_ending_cash/summary.total_portfolio_value*100:.1f}%)")
+        live_val = f"${summary.total_portfolio_value:,.2f}"
+        curr_cash = f"${summary.current_cash:,.2f}"
+        curr_cash_pct = f"{summary.current_cash/summary.total_portfolio_value*100:.1f}%"
+        end_cash = f"${summary.projected_ending_cash:,.2f}"
+        end_cash_pct = f"{summary.projected_ending_cash/summary.total_portfolio_value*100:.1f}%"
+        lines.append(f"> **Portfolio Live Value**: **{live_val}** | **Current Cash**: **{curr_cash}** ({curr_cash_pct}) | **Projected Ending Cash**: **{end_cash}** ({end_cash_pct})")
         lines.append("")
 
-        # Active Orders Section
+        # 1. Active Directives Section
         active_orders = [a for a in summary.allocations if a.action in ("BUY", "SELL") and a.order_shares > 0]
         sells = [a for a in active_orders if a.action == "SELL"]
         buys = [a for a in active_orders if a.action == "BUY"]
@@ -32,7 +37,10 @@ class MarkdownTradeReporter:
             lines.append("*All positions are aligned within risk and drift bands. Zero trades required today.*")
             lines.append("")
         else:
-            lines.append(f"**Total Capital to Reallocate**: Sells: **${summary.total_sells_dollars:,.2f}** | Buys: **${summary.total_buys_dollars:,.2f}** | Net Cash Change: **${(summary.total_sells_dollars - summary.total_buys_dollars):+,.2f}**")
+            s_dollars = f"${summary.total_sells_dollars:,.2f}"
+            b_dollars = f"${summary.total_buys_dollars:,.2f}"
+            net_change = f"${(summary.total_sells_dollars - summary.total_buys_dollars):+,.2f}"
+            lines.append(f"**Total Capital to Reallocate**: Sells: **{s_dollars}** | Buys: **{b_dollars}** | Net Cash Change: **{net_change}**")
             lines.append("")
             lines.append("| Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares |")
             lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
@@ -40,13 +48,41 @@ class MarkdownTradeReporter:
             for a in sells + buys:
                 curr_shares_str = f"{a.current_shares:g}"
                 order_shares_str = f"{a.order_shares:g}"
-                action_badge = f"**SELL** 🔴" if a.action == "SELL" else f"**BUY** 🟢"
+                action_badge = "**SELL** 🔴" if a.action == "SELL" else "**BUY** 🟢"
                 lines.append(
                     f"| **[[{a.ticker}]]** | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_badge} | **{order_shares_str}** |"
                 )
             lines.append("")
 
-        # Full Allocation Table
+        # 2. Aging & Approaching Stale Reports Section (Placed right after Directives and before Ledger)
+        lines.append("## ⏳ Aging & Approaching Stale Reports (Needs Re-evaluation)")
+        lines.append("")
+        lines.append(f"> Reports older than **{summary.max_age_days} days** are considered stale. The items below require a fresh `tradingagents` analysis run before their signals expire.")
+        lines.append("")
+
+        all_aging = summary.aging_signals + summary.expired_signals
+        if not all_aging:
+            lines.append(f"*All active reports are fresh (less than {summary.max_age_days - 4} days old). Zero reports approaching expiration.*")
+            lines.append("")
+        else:
+            lines.append("| Ticker | Report Date | Report Age | Days Left | Current Rating | In Portfolio? | Urgency & Action |")
+            lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :--- |")
+
+            for s in all_aging:
+                in_port_str = "**YES** ✅" if s.in_portfolio else "No (Watchlist)"
+                if s.is_expired:
+                    status_badge = "🛑 **EXPIRED** (>14d) — Re-run urgently!" if s.in_portfolio else "🛑 **EXPIRED** — Candidate inactive"
+                elif s.days_remaining <= 2:
+                    status_badge = f"⚠️ **CRITICAL ({s.days_remaining}d left)** — Queue today"
+                else:
+                    status_badge = f"🟡 **WARNING ({s.days_remaining}d left)** — Queue this week"
+
+                lines.append(
+                    f"| **[[{s.ticker}]]** | {s.date.isoformat()} | {s.age_days} days | {s.days_remaining} days | {s.signal.value} | {in_port_str} | {status_badge} |"
+                )
+            lines.append("")
+
+        # 3. Full Allocation Table
         lines.append("## 📊 Full Portfolio Rebalance & Drift Ledger")
         lines.append("")
         lines.append("| Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares |")
@@ -69,7 +105,7 @@ class MarkdownTradeReporter:
 
         lines.append("")
 
-        # Cluster Exposures
+        # 4. Cluster Exposures
         lines.append("## 🔗 Correlated Asset Clusters & Exposure")
         lines.append("")
         lines.append("| Cluster ID | Group Assets | Combined Target Weight | Cap Limit | Status |")
@@ -86,9 +122,6 @@ class MarkdownTradeReporter:
         return "\n".join(lines)
 
     def write_report(self, summary: ReconciliationSummary, filename: Optional[str] = None) -> Path:
-        """
-        Writes Trade_Orders_YYYY-MM-DD.md into output_dir.
-        """
         self.output_dir.mkdir(parents=True, exist_ok=True)
         if not filename:
             filename = f"Trade_Orders_{summary.execution_date.isoformat()}.md"

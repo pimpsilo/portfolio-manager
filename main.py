@@ -8,6 +8,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from pm.engine.controller import PortfolioManagerEngine
 from pm.output.reporter import MarkdownTradeReporter
+from pm.watcher import DownloadWatcher
 
 
 def format_table(headers, rows):
@@ -30,9 +31,15 @@ def main():
     parser.add_argument("--csv", type=str, help="Path to Fidelity Portfolio_Positions CSV", default=None)
     parser.add_argument("--config", type=str, help="Path to config.yaml", default=str(BASE_DIR / "config.yaml"))
     parser.add_argument("--execute", action="store_true", help="Generate Trade_Orders_YYYY-MM-DD.md in Obsidian vault")
+    parser.add_argument("--watch", action="store_true", help="Monitor ~/Downloads for new CSV and auto-execute")
     parser.add_argument("--preview", action="store_true", help="Display verification tables without writing", default=True)
 
     args = parser.parse_args()
+
+    if args.watch:
+        watcher = DownloadWatcher(config_path=args.config)
+        watcher.run()
+        return
 
     print("\n=======================================================")
     print("   🚀 PORTFOLIO MANAGER (PM) ENGINE — SOLVER START    ")
@@ -70,7 +77,21 @@ def main():
     else:
         print("All assets aligned within 20% relative drift and $1,500 trade floor. No orders today.")
 
-    # 2. Correlated Clusters Summary
+    # 2. Aging & Expiring Reports Table
+    all_aging = summary.aging_signals + summary.expired_signals
+    if all_aging:
+        print("\n=======================================================")
+        print(f"⏳ AGING & EXPIRING REPORTS ({len(all_aging)} Need Attention)")
+        print("=======================================================")
+        a_headers = ["Ticker", "Report Date", "Age (Days)", "Days Left", "Rating", "In Portfolio?", "Status"]
+        a_rows = []
+        for s in all_aging:
+            status = "EXPIRED (>14d)" if s.is_expired else f"STALE SOON ({s.days_remaining}d left)"
+            in_port = "YES" if s.in_portfolio else "No"
+            a_rows.append([s.ticker, s.date.isoformat(), f"{s.age_days}d", f"{s.days_remaining}d", s.signal.value, in_port, status])
+        print(format_table(a_headers, a_rows))
+
+    # 3. Correlated Clusters Summary
     print("\n=======================================================")
     print("🔗 CORRELATED ASSET CLUSTERS (Max 25% Exposure Cap)")
     print("=======================================================")
@@ -87,7 +108,7 @@ def main():
         ])
     print(format_table(c_headers, c_rows))
 
-    # 3. Output Generation if --execute
+    # 4. Output Generation if --execute
     reporter = MarkdownTradeReporter(engine.obsidian_vault_dir)
     if args.execute:
         saved_path = reporter.write_report(summary)

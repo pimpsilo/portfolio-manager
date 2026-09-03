@@ -32,8 +32,12 @@ class ParsedSignal:
     source_path: str
     target_price: Optional[float] = None
     stop_loss: Optional[float] = None
+    age_days: int = 0
+    days_remaining: int = 14
+    is_approaching_stale: bool = False
     is_expired: bool = False
     raw_rating: str = ""
+    in_portfolio: bool = False
 
 
 @dataclass
@@ -86,4 +90,7 @@ class ReconciliationSummary:
     total_sells_dollars: float
     allocations: List[AllocationResult]
     clusters: Dict[int, List[str]]
+    aging_signals: List[ParsedSignal] = field(default_factory=list)
+    expired_signals: List[ParsedSignal] = field(default_factory=list)
+    max_age_days: int = 14
     execution_date: date = field(default_factory=date.today)

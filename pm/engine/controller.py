@@ -6,7 +6,7 @@ import yaml
 from pm.ingest.broker_csv import BrokerCSVParser
 from pm.ingest.markdown_signals import MarkdownSignalParser
 from pm.market_data.pricing import MarketDataService
-from pm.models import AllocationResult, ReconciliationSummary, SignalType
+from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType
 from pm.risk.clustering import CorrelationClusterEngine
 from pm.risk.constraints import PortfolioConstraintOptimizer
 from pm.engine.reconciler import PortfolioReconciler
@@ -34,6 +34,7 @@ class PortfolioManagerEngine:
         self.obsidian_vault_dir = paths.get("obsidian_vault_dir", "/Users/matthewhope/reports")
 
         self.max_age_days = signals_cfg.get("max_age_days", 14)
+        self.stale_warning_days = signals_cfg.get("stale_warning_days", 4)
         self.candidate_min_signal = SignalType.from_str(signals_cfg.get("candidate_min_signal", "OVERWEIGHT"))
 
         # Multipliers
@@ -45,7 +46,11 @@ class PortfolioManagerEngine:
         }
 
         # Subsystems
-        self.signal_parser = MarkdownSignalParser(self.reports_dir, max_age_days=self.max_age_days)
+        self.signal_parser = MarkdownSignalParser(
+            self.reports_dir,
+            max_age_days=self.max_age_days,
+            stale_warning_days=self.stale_warning_days,
+        )
         self.csv_parser = BrokerCSVParser(self.downloads_dir)
         self.market_data = MarketDataService(lookback_days=risk_cfg.get("history_lookback_days", 180))
         self.cluster_engine = CorrelationClusterEngine(
@@ -81,6 +86,17 @@ class PortfolioManagerEngine:
 
         logger.info("Ingesting Markdown analyst signals from vault...")
         parsed_signals = self.signal_parser.parse_all_signals(as_of_date=as_of_date)
+
+        # Mark in_portfolio flag on signals
+        for ticker, sig in parsed_signals.items():
+            sig.in_portfolio = ticker in portfolio_state.holdings
+
+        # Identify Aging (Almost Stale) and Expired Signals
+        aging_signals = [s for s in parsed_signals.values() if s.is_approaching_stale]
+        aging_signals.sort(key=lambda s: (not s.in_portfolio, s.days_remaining))
+
+        expired_signals = [s for s in parsed_signals.values() if s.is_expired]
+        expired_signals.sort(key=lambda s: (not s.in_portfolio, -s.age_days))
 
         # 2. Form Investable Universe:
         # All current holdings + Non-portfolio candidates with active OVERWEIGHT signals
@@ -156,5 +172,8 @@ class PortfolioManagerEngine:
             total_sells_dollars=total_sells,
             allocations=allocations,
             clusters=clusters,
+            aging_signals=aging_signals,
+            expired_signals=expired_signals,
+            max_age_days=self.max_age_days,
             execution_date=as_of_date,
         )
