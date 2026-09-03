@@ -1,0 +1,27 @@
+paths:
+  reports_dir: "/Users/matthewhope/reports"
+  downloads_dir: "/Users/matthewhope/Downloads"
+  obsidian_vault_dir: "/Users/matthewhope/reports"
+
+signals:
+  max_age_days: 14
+
+risk:
+  max_position_weight: 0.15      # Max 15% single position
+  min_cash_reserve: 0.10         # Min 10% cash reserve
+  max_cluster_exposure: 0.25     # Max 25% exposure per correlated cluster
+  clustering_cophenetic_threshold: 0.5
+  history_lookback_days: 180
+
+multipliers:
+  OVERWEIGHT: 1.5
+  EQUAL_WEIGHT: 1.0
+  UNDERWEIGHT: 0.5
+  AVOID: 0.0
+
+rebalance:
+  drift_mode: "relative"         # Option B: relative position drift
+  relative_threshold: 0.20       # 20% deviation from target position size
+  min_dollar_trade: 1500.0       # Minimum trade floor
+  prefer_whole_shares: true      # Round standard orders to whole integer shares
+  liquidate_avoid: true          # Always fully liquidate 100% on AVOID signals
