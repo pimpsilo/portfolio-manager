@@ -15,6 +15,16 @@ risk:
   clustering_cophenetic_threshold: 0.5
   history_lookback_days: 180
 
+# Option 5: Market-Cap / Maturity Anchor with Active Tilts
+market_cap_weighting:
+  enabled: true
+  mega_cap_threshold: 200000000000    # $200B
+  large_cap_threshold: 50000000000     # $50B
+  tier_multipliers:
+    mega_cap: 3.0                      # Mega-cap anchor (e.g. META, AMZN, GOOG, NVDA, MSFT)
+    large_cap: 1.8                     # Large-cap core (e.g. SPGI, MCO, INTU, BKNG, UBER)
+    mid_cap: 1.0                       # Mid/Emerging satellite (e.g. HIG, EG, WDC, ALAB)
+
 multipliers:
   OVERWEIGHT: 1.5
   EQUAL_WEIGHT: 1.0

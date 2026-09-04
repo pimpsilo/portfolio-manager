@@ -62,11 +62,16 @@ $$\text{Universe} = \text{Current Portfolio Holdings} \cup \{ \text{Non-Portfoli
 * Enforce a **maximum 25% exposure cap** per correlated cluster group.
 
 ### Step 3 & 4: Base Weighting & Hard Constraints Optimizer (`pm/risk/constraints.py`)
-* **Signal Multipliers:**
+* **Option 5 Market-Cap / Maturity Anchoring:**
+  - **Mega-Cap ($200B+)**: 3.0x base anchor multiplier (`AAPL`, `MSFT`, `NVDA`, `AMZN`, `GOOG`, `META`, `AMD`, `NFLX`, etc.)
+  - **Large-Cap ($50B - $200B)**: 1.8x base multiplier (`SPGI`, `MCO`, `INTU`, `BKNG`, `UBER`, `PDD`, `MELI`, etc.)
+  - **Mid/Emerging (<$50B)**: 1.0x base multiplier (`HIG`, `EG`, `WDC`, `ALAB`, `RDDT`, `DUOL`, etc.)
+* **Signal Multipliers (Modulating Base Anchor):**
   - `OVERWEIGHT`: 1.5x
   - `EQUAL_WEIGHT`: 1.0x
   - `UNDERWEIGHT`: 0.5x
   - `AVOID`: 0.0x
+  - $\text{Raw Weight}_i = \text{CapMultiplier}_i \times \text{SignalMultiplier}_i$
 * **Hard Portfolio Limits:**
   - Maximum single position size: **$\le 15\%$** of total portfolio.
   - Minimum cash reserve floor: **$\ge 10\%$** of total portfolio ($\text{Equity Budget} \le 90\%$).

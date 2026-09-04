@@ -28,6 +28,7 @@ class PortfolioManagerEngine:
         risk_cfg = self.config.get("risk", {})
         rebalance_cfg = self.config.get("rebalance", {})
         multipliers_cfg = self.config.get("multipliers", {})
+        market_cap_cfg = self.config.get("market_cap_weighting", {})
 
         self.reports_dir = paths.get("reports_dir", "/Users/matthewhope/reports")
         self.downloads_dir = paths.get("downloads_dir", "/Users/matthewhope/Downloads")
@@ -61,6 +62,7 @@ class PortfolioManagerEngine:
             min_cash_reserve=risk_cfg.get("min_cash_reserve", 0.10),
             max_cluster_exposure=risk_cfg.get("max_cluster_exposure", 0.25),
             multipliers=multipliers,
+            market_cap_cfg=market_cap_cfg,
         )
         self.reconciler = PortfolioReconciler(
             relative_threshold=rebalance_cfg.get("relative_threshold", 0.20),
@@ -117,17 +119,16 @@ class PortfolioManagerEngine:
             if t in parsed_signals:
                 sig_obj = parsed_signals[t]
                 if sig_obj.is_expired:
-                    # Held position with expired signal defaults to EQUAL_WEIGHT
                     active_signals[t] = SignalType.EQUAL_WEIGHT
                 else:
                     active_signals[t] = sig_obj.signal
             else:
-                # Held position with no report defaults to EQUAL_WEIGHT
                 active_signals[t] = SignalType.EQUAL_WEIGHT
 
-        # 3. Step 1: Real-Time Pricing (yfinance)
+        # 3. Step 1: Real-Time Pricing & Market Caps (yfinance)
         fallback_prices = {s: h.last_price for s, h in portfolio_state.holdings.items()}
         realtime_prices = self.market_data.fetch_realtime_prices(sorted_universe, fallback_prices=fallback_prices)
+        market_caps = self.market_data.fetch_market_caps(sorted_universe)
 
         # Recalculate total portfolio value using live market prices
         current_equity_live = sum(
@@ -140,11 +141,12 @@ class PortfolioManagerEngine:
         returns_df = self.market_data.fetch_historical_returns(sorted_universe, period="6mo")
         clusters = self.cluster_engine.cluster_assets(returns_df)
 
-        # 5. Steps 3 & 4: Base Weighting & Hard Constraints
+        # 5. Steps 3 & 4: Option 5 Market-Cap Base Weighting & Hard Constraints
         target_weights = self.optimizer.optimize_weights(
             tickers=sorted_universe,
             signals=active_signals,
             clusters=clusters,
+            market_caps=market_caps,
         )
 
         # 6. Step 5: Reconciliation & Order Sizing
