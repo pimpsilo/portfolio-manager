@@ -10,6 +10,11 @@
         <string>/Users/matthewhope/github_projects/portfolio-manager/main.py</string>
         <string>--watch</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
     <key>WorkingDirectory</key>
     <string>/Users/matthewhope/github_projects/portfolio-manager</string>
     <key>RunAtLoad</key>
