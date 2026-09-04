@@ -8,6 +8,13 @@ signals:
   stale_warning_days: 4          # Alert if report expires in <= 4 days (i.e. age >= 10 days)
   candidate_min_signal: "OVERWEIGHT"
 
+# Equivalent share classes (e.g. Alphabet Class C and Class A)
+# If one is already held in the portfolio, the other is merged to prevent double allocation.
+equivalent_symbols:
+  - ["GOOG", "GOOGL"]
+  - ["FOX", "FOXA"]
+  - ["BRK.A", "BRK.B"]
+
 risk:
   max_position_weight: 0.15      # Max 15% single position
   min_cash_reserve: 0.10         # Min 10% cash reserve

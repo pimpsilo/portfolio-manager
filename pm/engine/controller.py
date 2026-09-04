@@ -1,6 +1,6 @@
 import logging
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 import yaml
 
 from pm.ingest.broker_csv import BrokerCSVParser
@@ -29,6 +29,10 @@ class PortfolioManagerEngine:
         rebalance_cfg = self.config.get("rebalance", {})
         multipliers_cfg = self.config.get("multipliers", {})
         market_cap_cfg = self.config.get("market_cap_weighting", {})
+        self.equivalent_symbols = self.config.get(
+            "equivalent_symbols",
+            [["GOOG", "GOOGL"], ["FOX", "FOXA"], ["BRK.A", "BRK.B"]],
+        )
 
         self.reports_dir = paths.get("reports_dir", "/Users/matthewhope/reports")
         self.downloads_dir = paths.get("downloads_dir", "/Users/matthewhope/Downloads")
@@ -89,23 +93,50 @@ class PortfolioManagerEngine:
         logger.info("Ingesting Markdown analyst signals from vault...")
         parsed_signals = self.signal_parser.parse_all_signals(as_of_date=as_of_date)
 
+        # Resolve equivalent symbols (e.g. GOOG / GOOGL)
+        # If any symbol in an equivalent group is held, canonical symbol is the held one
+        held_symbols = set(portfolio_state.holdings.keys())
+        alias_map: Dict[str, str] = {}
+        for group in self.equivalent_symbols:
+            held_in_group = [s for s in group if s in held_symbols]
+            canonical = held_in_group[0] if held_in_group else group[0]
+            for s in group:
+                if s != canonical:
+                    alias_map[s] = canonical
+
+        # Merge signals from equivalent symbols
+        for alias_sym, canonical_sym in alias_map.items():
+            if alias_sym in parsed_signals:
+                alias_sig = parsed_signals[alias_sym]
+                if canonical_sym not in parsed_signals:
+                    parsed_signals[canonical_sym] = alias_sig
+                else:
+                    can_sig = parsed_signals[canonical_sym]
+                    if alias_sig.date >= can_sig.date or (alias_sig.signal == SignalType.OVERWEIGHT and can_sig.signal != SignalType.OVERWEIGHT):
+                        logger.info(f"Adopting signal {alias_sig.signal.value} from equivalent symbol {alias_sym} for {canonical_sym}")
+                        parsed_signals[canonical_sym] = alias_sig
+
         # Mark in_portfolio flag on signals
         for ticker, sig in parsed_signals.items():
-            sig.in_portfolio = ticker in portfolio_state.holdings
+            canonical = alias_map.get(ticker, ticker)
+            sig.in_portfolio = canonical in portfolio_state.holdings
 
         # Identify Aging (Almost Stale) and Expired Signals
-        aging_signals = [s for s in parsed_signals.values() if s.is_approaching_stale]
+        aging_signals = [s for s in parsed_signals.values() if s.is_approaching_stale and s.ticker not in alias_map]
         aging_signals.sort(key=lambda s: (not s.in_portfolio, s.days_remaining))
 
-        expired_signals = [s for s in parsed_signals.values() if s.is_expired]
+        expired_signals = [s for s in parsed_signals.values() if s.is_expired and s.ticker not in alias_map]
         expired_signals.sort(key=lambda s: (not s.in_portfolio, -s.age_days))
 
         # 2. Form Investable Universe:
-        # All current holdings + Non-portfolio candidates with active OVERWEIGHT signals
+        # Current holdings + Non-portfolio candidates with active OVERWEIGHT signals (deduplicated against holdings)
         universe_tickers = set(portfolio_state.holdings.keys())
         for ticker, sig in parsed_signals.items():
+            canonical = alias_map.get(ticker, ticker)
+            if canonical in portfolio_state.holdings:
+                continue
             if not sig.is_expired and sig.signal == self.candidate_min_signal:
-                universe_tickers.add(ticker)
+                universe_tickers.add(canonical)
 
         sorted_universe = sorted(universe_tickers)
         logger.info(
