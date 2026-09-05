@@ -41,6 +41,7 @@ multipliers:
 rebalance:
   drift_mode: "relative"         # Option B: relative position drift
   relative_threshold: 0.20       # 20% deviation from target position size
+  hold_drift_tolerance: 1.00     # Let equal-weight holds float up to 100% above target before trimming
   min_dollar_trade: 1500.0       # Minimum trade floor
   prefer_whole_shares: true      # Round standard orders to whole integer shares
   liquidate_avoid: true          # Always fully liquidate 100% on AVOID signals

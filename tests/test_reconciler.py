@@ -84,3 +84,70 @@ def test_reconciler_option_b_and_whole_shares():
     assert alloc_map["NEWCO"].action == "BUY"
     assert alloc_map["NEWCO"].order_shares == 20.0
     assert alloc_map["NEWCO"].is_whole_share is True
+
+
+def test_asymmetric_hold_drift_protects_winners():
+    reconciler = PortfolioReconciler(
+        relative_threshold=0.20,      # 20% standard threshold
+        hold_drift_tolerance=1.00,    # 100% tolerance for EQUAL_WEIGHT (Hold)
+        min_dollar_trade=1500.0,
+        prefer_whole_shares=True,
+    )
+
+    total_value = 100000.0
+
+    # Scenario: META is target $5,000 (5%), but current holdings are $8,750 (8.75%).
+    # Absolute delta is -$3,750 (> $1,500 floor).
+    # Relative drift is 3,750 / 5,000 = 75.0% (> 20% standard threshold, but <= 100% hold tolerance).
+    holdings = {
+        "META": Holding("META", "Meta Platforms", quantity=17.5, last_price=500.0, current_value=8750.0),
+    }
+    target_weights = {"META": 0.05}
+    realtime_prices = {"META": 500.0}
+    clusters = {1: ["META"]}
+
+    # Case A: Signal is EQUAL_WEIGHT (Hold) -> Protected by asymmetric policy
+    alloc_hold = reconciler.reconcile(
+        total_portfolio_value=total_value,
+        current_holdings=holdings,
+        target_weights=target_weights,
+        realtime_prices=realtime_prices,
+        signals={"META": SignalType.EQUAL_WEIGHT},
+        clusters=clusters,
+    )
+    res_hold = alloc_hold[0]
+    assert res_hold.action == "HOLD"
+    assert res_hold.order_shares == 0.0
+    assert "HOLD_WINNER_PROTECTED" in res_hold.reason
+
+    # Case B: Signal is UNDERWEIGHT -> Rebalance trim fires (not protected)
+    alloc_under = reconciler.reconcile(
+        total_portfolio_value=total_value,
+        current_holdings=holdings,
+        target_weights=target_weights,
+        realtime_prices=realtime_prices,
+        signals={"META": SignalType.UNDERWEIGHT},
+        clusters=clusters,
+    )
+    res_under = alloc_under[0]
+    assert res_under.action == "SELL"
+    assert res_under.order_shares == 8.0  # $3,750 / $500 = 7.5 -> round to 8
+    assert "REBALANCE_TRIM" in res_under.reason
+
+    # Case C: Drift exceeds 100% (e.g. Current $11,000 vs Target $5,000 = 120% drift) -> Trim fires
+    holdings_extreme = {
+        "META": Holding("META", "Meta Platforms", quantity=22.0, last_price=500.0, current_value=11000.0),
+    }
+    alloc_extreme = reconciler.reconcile(
+        total_portfolio_value=total_value,
+        current_holdings=holdings_extreme,
+        target_weights=target_weights,
+        realtime_prices=realtime_prices,
+        signals={"META": SignalType.EQUAL_WEIGHT},
+        clusters=clusters,
+    )
+    res_extreme = alloc_extreme[0]
+    assert res_extreme.action == "SELL"
+    assert res_extreme.order_shares == 12.0  # $6,000 / $500 = 12
+    assert "REBALANCE_TRIM" in res_extreme.reason
+

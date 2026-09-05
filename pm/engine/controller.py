@@ -70,6 +70,7 @@ class PortfolioManagerEngine:
         )
         self.reconciler = PortfolioReconciler(
             relative_threshold=rebalance_cfg.get("relative_threshold", 0.20),
+            hold_drift_tolerance=rebalance_cfg.get("hold_drift_tolerance", 1.00),
             min_dollar_trade=rebalance_cfg.get("min_dollar_trade", 1500.0),
             prefer_whole_shares=rebalance_cfg.get("prefer_whole_shares", True),
             liquidate_avoid=rebalance_cfg.get("liquidate_avoid", True),

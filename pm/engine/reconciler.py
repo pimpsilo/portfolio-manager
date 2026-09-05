@@ -14,11 +14,13 @@ class PortfolioReconciler:
     def __init__(
         self,
         relative_threshold: float = 0.20,      # 20% relative drift
+        hold_drift_tolerance: float = 1.00,    # 100% relative drift tolerance for EQUAL_WEIGHT (Hold)
         min_dollar_trade: float = 1500.0,       # $1,500 minimum trade floor
         prefer_whole_shares: bool = True,
         liquidate_avoid: bool = True,
     ):
         self.relative_threshold = relative_threshold
+        self.hold_drift_tolerance = hold_drift_tolerance
         self.min_dollar_trade = min_dollar_trade
         self.prefer_whole_shares = prefer_whole_shares
         self.liquidate_avoid = liquidate_avoid
@@ -93,14 +95,27 @@ class PortfolioReconciler:
             else:
                 rel_drift = abs_delta_dollars / target_value if target_value > 0 else 1.0
 
+                # Determine effective drift tolerance:
+                # If holding is above target but analyst rating is EQUAL_WEIGHT (Hold),
+                # allow it to float up to hold_drift_tolerance before forcing trims.
+                if sig == SignalType.EQUAL_WEIGHT and dollar_delta < 0:
+                    effective_threshold = self.hold_drift_tolerance
+                    is_hold_policy = True
+                else:
+                    effective_threshold = self.relative_threshold
+                    is_hold_policy = False
+
                 if abs_delta_dollars < self.min_dollar_trade:
                     action = "HOLD"
                     order_shares = 0.0
                     reason = f"SUPPRESSED_UNDER_FLOOR (${abs_delta_dollars:.0f} < ${self.min_dollar_trade:.0f})"
-                elif rel_drift <= self.relative_threshold:
+                elif rel_drift <= effective_threshold:
                     action = "HOLD"
                     order_shares = 0.0
-                    reason = f"SUPPRESSED_IN_BAND ({rel_drift*100:.1f}% <= {self.relative_threshold*100:.0f}%)"
+                    if is_hold_policy:
+                        reason = f"HOLD_WINNER_PROTECTED ({rel_drift*100:.1f}% <= {effective_threshold*100:.0f}%)"
+                    else:
+                        reason = f"SUPPRESSED_IN_BAND ({rel_drift*100:.1f}% <= {effective_threshold*100:.0f}%)"
                 else:
                     # Triggers active rebalance!
                     if dollar_delta > 0:
