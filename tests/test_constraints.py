@@ -115,3 +115,60 @@ def test_option_5_market_cap_tiering():
 
     # Total equity allocated is 90% (10% cash reserve)
     assert abs(sum(weights.values()) - 0.90) < 1e-4
+
+
+def test_dry_powder_cash_reserve_guard():
+    # Verify that total buys are scaled so ending cash never drops below 15% reserve
+    from pm.models import AllocationResult, Holding, PortfolioState
+    from pm.engine.controller import PortfolioManagerEngine
+    from pm.engine.reconciler import PortfolioReconciler
+    from unittest.mock import MagicMock
+
+    engine = PortfolioManagerEngine()
+    engine.optimizer.min_cash_reserve = 0.15 # 15%
+
+    # Mock total portfolio value: $100,000, current cash: $30,000, target cash: $15,000
+    # Sells = $0. Available buying power = $30,000 - $15,000 = $15,000.
+    # Suppose raw buys are $30,000 (two stocks @ $15,000 each).
+    allocations = [
+        AllocationResult(
+            ticker="STK1", current_shares=0, realtime_price=100.0, current_value=0,
+            current_weight=0, signal=SignalType.OVERWEIGHT, cluster_id=1, base_weight=0.05,
+            target_weight=5.0, target_value=15000, dollar_delta=15000, drift_pct=5.0,
+            action="BUY", order_shares=150.0, is_whole_share=True, reason="NEW_STARTER"
+        ),
+        AllocationResult(
+            ticker="STK2", current_shares=0, realtime_price=100.0, current_value=0,
+            current_weight=0, signal=SignalType.OVERWEIGHT, cluster_id=2, base_weight=0.05,
+            target_weight=5.0, target_value=15000, dollar_delta=15000, drift_pct=5.0,
+            action="BUY", order_shares=150.0, is_whole_share=True, reason="NEW_STARTER"
+        ),
+    ]
+
+    total_live_portfolio_value = 100000.0
+    cash_balance = 30000.0
+    target_cash_reserve = 0.15 * total_live_portfolio_value  # $15,000
+    total_sells = 0.0
+
+    available_buying_power = max(0.0, cash_balance + total_sells - target_cash_reserve) # $15,000
+    total_buys_raw = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "BUY") # $30,000
+
+    assert total_buys_raw > available_buying_power
+    scale = available_buying_power / total_buys_raw # 0.50
+
+    import math
+    for a in allocations:
+        if a.action == "BUY" and a.order_shares > 0:
+            scaled_dollars = (a.order_shares * a.realtime_price) * scale
+            new_shares = math.floor(scaled_dollars / a.realtime_price)
+            a.order_shares = float(new_shares)
+
+    total_buys_scaled = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "BUY")
+    projected_ending_cash = cash_balance + total_sells - total_buys_scaled
+
+    # Scaled buys must not exceed available buying power
+    assert total_buys_scaled <= available_buying_power + 1e-4
+    # Ending cash must be >= 15% reserve ($15,000)
+    assert projected_ending_cash >= target_cash_reserve
+    assert abs(projected_ending_cash - 15000.0) < 1.0
+

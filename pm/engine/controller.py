@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import date
 from typing import Dict, List, Optional, Set
 import yaml
@@ -61,9 +62,10 @@ class PortfolioManagerEngine:
         self.cluster_engine = CorrelationClusterEngine(
             cophenetic_threshold=risk_cfg.get("clustering_cophenetic_threshold", 0.5)
         )
+        self.enforce_cash_reserve = risk_cfg.get("enforce_cash_reserve_on_buys", True)
         self.optimizer = PortfolioConstraintOptimizer(
             max_position_weight=risk_cfg.get("max_position_weight", 0.15),
-            min_cash_reserve=risk_cfg.get("min_cash_reserve", 0.10),
+            min_cash_reserve=risk_cfg.get("min_cash_reserve", 0.15),
             max_cluster_exposure=risk_cfg.get("max_cluster_exposure", 0.25),
             multipliers=multipliers,
             market_cap_cfg=market_cap_cfg,
@@ -191,10 +193,39 @@ class PortfolioManagerEngine:
             clusters=clusters,
         )
 
-        # Calculate Cash Flow Summary
-        total_buys = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "BUY")
+        # 7. Step 6: Dry Powder Cash Reserve Guard (Enforce Hard min_cash_reserve)
+        # Guarantees that total buy orders do not deplete cash below the target cash reserve,
+        # especially when existing winning positions are protected from selling.
         total_sells = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "SELL")
         target_cash_reserve = self.optimizer.min_cash_reserve * total_live_portfolio_value
+        
+        if self.enforce_cash_reserve:
+            available_buying_power = max(0.0, portfolio_state.cash_balance + total_sells - target_cash_reserve)
+            total_buys_raw = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "BUY")
+            
+            if total_buys_raw > available_buying_power and total_buys_raw > 0:
+                scale = available_buying_power / total_buys_raw
+                logger.info(
+                    f"Enforcing cash reserve guard: Total buys (${total_buys_raw:,.2f}) exceed available buying power "
+                    f"(${available_buying_power:,.2f}). Scaling buys by {scale:.4f} to preserve {self.optimizer.min_cash_reserve*100:.1f}% cash."
+                )
+                for a in allocations:
+                    if a.action == "BUY" and a.order_shares > 0:
+                        scaled_dollars = (a.order_shares * a.realtime_price) * scale
+                        new_shares = math.floor(scaled_dollars / a.realtime_price)
+                        if new_shares * a.realtime_price < self.reconciler.min_dollar_trade:
+                            new_shares = 0
+                        if new_shares > 0:
+                            a.order_shares = float(new_shares)
+                            a.reason += f" [CASH_GUARD_SCALE: {scale:.1%}]"
+                        else:
+                            a.action = "HOLD"
+                            a.order_shares = 0.0
+                            a.reason = "CASH_GUARD_SUB_FLOOR"
+
+        # Final Cash Flow Summary
+        total_buys = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "BUY")
+        total_sells = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "SELL")
         projected_ending_cash = portfolio_state.cash_balance + total_sells - total_buys
 
         return ReconciliationSummary(
