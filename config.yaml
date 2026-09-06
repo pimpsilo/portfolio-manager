@@ -47,6 +47,14 @@ rebalance:
   prefer_whole_shares: true      # Round standard orders to whole integer shares
   liquidate_avoid: true          # Always fully liquidate 100% on AVOID signals
 
+  # Transaction Stepping & Staged Execution Controls
+  stepping:
+    enabled: true
+    starter_step_factor: 0.50     # 50% tranche for new candidate starter entries
+    rebalance_step_factor: 0.50   # 50% tranche for rebalance buys and trims
+    max_trade_dollar_cap: 6000.0  # Max dollar trade per order ($6,000 ceiling guard)
+    avoid_step_factor: 1.00       # 100% immediate liquidation on AVOID signals
+
 watcher:
   poll_interval_seconds: 3       # Check Downloads folder every 3 seconds
   debounce_seconds: 2            # Wait after file write finishes before running solver

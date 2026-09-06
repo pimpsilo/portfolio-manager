@@ -18,12 +18,22 @@ class PortfolioReconciler:
         min_dollar_trade: float = 1500.0,       # $1,500 minimum trade floor
         prefer_whole_shares: bool = True,
         liquidate_avoid: bool = True,
+        stepping_enabled: bool = True,
+        starter_step_factor: float = 0.50,
+        rebalance_step_factor: float = 0.50,
+        max_trade_dollar_cap: float = 6000.0,
+        avoid_step_factor: float = 1.00,
     ):
         self.relative_threshold = relative_threshold
         self.hold_drift_tolerance = hold_drift_tolerance
         self.min_dollar_trade = min_dollar_trade
         self.prefer_whole_shares = prefer_whole_shares
         self.liquidate_avoid = liquidate_avoid
+        self.stepping_enabled = stepping_enabled
+        self.starter_step_factor = starter_step_factor
+        self.rebalance_step_factor = rebalance_step_factor
+        self.max_trade_dollar_cap = max_trade_dollar_cap
+        self.avoid_step_factor = avoid_step_factor
 
     def reconcile(
         self,
@@ -57,8 +67,8 @@ class PortfolioReconciler:
             current_weight = current_value / total_portfolio_value if total_portfolio_value > 0 else 0.0
 
             target_weight = target_weights.get(ticker, 0.0)
-            target_value = target_weight * total_portfolio_value
-            dollar_delta = target_value - current_value
+            target_value = round(target_weight * total_portfolio_value, 2)
+            dollar_delta = round(target_value - current_value, 2)
 
             sig = signals.get(ticker, SignalType.EQUAL_WEIGHT)
             cluster_id = ticker_to_cluster.get(ticker, 0)
@@ -74,22 +84,40 @@ class PortfolioReconciler:
             # 1. Full Liquidation on AVOID or Zero Target
             if (sig == SignalType.AVOID or target_weight <= 0.0) and current_shares > 0:
                 action = "SELL"
-                # For complete exits, preserve exact fractional shares to clear the account cleanly
-                order_shares = current_shares
-                is_whole_share = current_shares.is_integer()
+                if self.avoid_step_factor >= 1.0 or self.liquidate_avoid:
+                    order_shares = current_shares
+                else:
+                    raw_shares = current_shares * self.avoid_step_factor
+                    order_shares = round(raw_shares) if self.prefer_whole_shares else raw_shares
+                is_whole_share = order_shares.is_integer()
                 reason = "AVOID_LIQUIDATION" if sig == SignalType.AVOID else "ZERO_TARGET_LIQUIDATION"
 
             # 2. New Position Entry (Candidate with current_shares == 0)
             elif current_shares <= 0:
-                if target_value >= self.min_dollar_trade and price > 0:
+                effective_starter_dollars = target_value
+                if self.stepping_enabled:
+                    effective_starter_dollars = round(min(
+                        target_value * self.starter_step_factor,
+                        self.max_trade_dollar_cap,
+                    ), 2)
+
+                if effective_starter_dollars >= self.min_dollar_trade and price > 0:
                     action = "BUY"
-                    raw_shares = target_value / price
+                    raw_shares = effective_starter_dollars / price
                     order_shares = round(raw_shares) if self.prefer_whole_shares else raw_shares
-                    reason = "NEW_STARTER_ENTRY"
+                    reason = (
+                        f"STARTER_TRANCHE ({self.starter_step_factor*100:.0f}%, cap ${self.max_trade_dollar_cap:,.0f})"
+                        if self.stepping_enabled
+                        else "NEW_STARTER_ENTRY"
+                    )
                 else:
                     action = "HOLD"
                     order_shares = 0.0
-                    reason = "BELOW_MIN_STARTER_FLOOR"
+                    reason = (
+                        f"BELOW_MIN_STARTER_FLOOR (${effective_starter_dollars:.0f} < ${self.min_dollar_trade:.0f})"
+                        if self.stepping_enabled
+                        else "BELOW_MIN_STARTER_FLOOR"
+                    )
 
             # 3. Existing Position Rebalance (Option B: Relative Drift + Trade Floor)
             else:
@@ -119,19 +147,50 @@ class PortfolioReconciler:
                 else:
                     # Triggers active rebalance!
                     if dollar_delta > 0:
-                        action = "BUY"
-                        raw_shares = abs_delta_dollars / price if price > 0 else 0.0
-                        order_shares = round(raw_shares) if self.prefer_whole_shares else raw_shares
-                        reason = f"REBALANCE_BUY ({rel_drift*100:.1f}% drift)"
+                        effective_buy_dollars = abs_delta_dollars
+                        if self.stepping_enabled:
+                            effective_buy_dollars = round(min(
+                                abs_delta_dollars * self.rebalance_step_factor,
+                                self.max_trade_dollar_cap,
+                            ), 2)
+                        if effective_buy_dollars >= self.min_dollar_trade and price > 0:
+                            action = "BUY"
+                            raw_shares = effective_buy_dollars / price
+                            order_shares = round(raw_shares) if self.prefer_whole_shares else raw_shares
+                            reason = (
+                                f"REBALANCE_BUY_STEP ({self.rebalance_step_factor*100:.0f}%, cap ${self.max_trade_dollar_cap:,.0f})"
+                                if self.stepping_enabled
+                                else f"REBALANCE_BUY ({rel_drift*100:.1f}% drift)"
+                            )
+                        else:
+                            action = "HOLD"
+                            order_shares = 0.0
+                            reason = f"SUPPRESSED_UNDER_FLOOR (stepped ${effective_buy_dollars:.0f} < ${self.min_dollar_trade:.0f})"
                     else:
-                        action = "SELL"
-                        raw_shares = abs_delta_dollars / price if price > 0 else 0.0
-                        order_shares = round(raw_shares) if self.prefer_whole_shares else raw_shares
-                        # Guard: cannot sell more than current shares
-                        if order_shares >= current_shares:
-                            order_shares = current_shares
-                            is_whole_share = current_shares.is_integer()
-                        reason = f"REBALANCE_TRIM ({rel_drift*100:.1f}% drift)"
+                        effective_sell_dollars = abs_delta_dollars
+                        if self.stepping_enabled:
+                            effective_sell_dollars = round(min(
+                                abs_delta_dollars * self.rebalance_step_factor,
+                                self.max_trade_dollar_cap,
+                            ), 2)
+                        if effective_sell_dollars >= self.min_dollar_trade and price > 0:
+                            action = "SELL"
+                            raw_shares = effective_sell_dollars / price
+                            order_shares = round(raw_shares) if self.prefer_whole_shares else raw_shares
+                            # Guard: cannot sell more than current shares
+                            if order_shares >= current_shares:
+                                order_shares = current_shares
+                                is_whole_share = current_shares.is_integer()
+                            reason = (
+                                f"REBALANCE_TRIM_STEP ({self.rebalance_step_factor*100:.0f}%, cap ${self.max_trade_dollar_cap:,.0f})"
+                                if self.stepping_enabled
+                                else f"REBALANCE_TRIM ({rel_drift*100:.1f}% drift)"
+                            )
+                        else:
+                            action = "HOLD"
+                            order_shares = 0.0
+                            reason = f"SUPPRESSED_UNDER_FLOOR (stepped ${effective_sell_dollars:.0f} < ${self.min_dollar_trade:.0f})"
+
 
             # Final check: If price is so high that order_shares == 0, revert to HOLD
             if action in ("BUY", "SELL") and order_shares <= 0:

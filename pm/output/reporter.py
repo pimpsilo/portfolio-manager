@@ -42,15 +42,15 @@ class MarkdownTradeReporter:
             net_change = f"${(summary.total_sells_dollars - summary.total_buys_dollars):+,.2f}"
             lines.append(f"**Total Capital to Reallocate**: Sells: **{s_dollars}** | Buys: **{b_dollars}** | Net Cash Change: **{net_change}**")
             lines.append("")
-            lines.append("| Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares |")
-            lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+            lines.append("| Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares | Directive Rationale |")
+            lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
 
             for a in sells + buys:
                 curr_shares_str = f"{a.current_shares:g}"
                 order_shares_str = f"{a.order_shares:g}"
                 action_badge = "**SELL** 🔴" if a.action == "SELL" else "**BUY** 🟢"
                 lines.append(
-                    f"| **[[{a.ticker}]]** | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_badge} | **{order_shares_str}** |"
+                    f"| **[[{a.ticker}]]** | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_badge} | **{order_shares_str}** | {a.reason} |"
                 )
             lines.append("")
 
@@ -85,8 +85,8 @@ class MarkdownTradeReporter:
         # 3. Full Allocation Table
         lines.append("## 📊 Full Portfolio Rebalance & Drift Ledger")
         lines.append("")
-        lines.append("| Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares |")
-        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+        lines.append("| Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares | Drift / Protection Rationale |")
+        lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
 
         for a in summary.allocations:
             curr_shares_str = f"{a.current_shares:g}"
@@ -100,8 +100,9 @@ class MarkdownTradeReporter:
                 action_display = "HOLD 🟡"
 
             lines.append(
-                f"| **[[{a.ticker}]]** | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_display} | {order_shares_str} |"
+                f"| **[[{a.ticker}]]** | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_display} | {order_shares_str} | {a.reason} |"
             )
+
 
         lines.append("")
 
