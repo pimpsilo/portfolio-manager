@@ -21,7 +21,13 @@ class DownloadWatcher:
     def __init__(self, config_path: str = "config.yaml"):
         self.engine = PortfolioManagerEngine(config_path=config_path)
         self.downloads_dir = Path(self.engine.downloads_dir)
-        self.reporter = MarkdownTradeReporter(self.engine.obsidian_vault_dir)
+        output_cfg = self.engine.config.get("output", {})
+        self.reporter = MarkdownTradeReporter(
+            self.engine.obsidian_vault_dir,
+            link_style=output_cfg.get("report_link_style", "markdown"),
+            prefer_complete_report=output_cfg.get("prefer_complete_report", True),
+            date_layout=output_cfg.get("date_layout", "stacked"),
+        )
 
         watcher_cfg = self.engine.config.get("watcher", {})
         self.poll_interval = watcher_cfg.get("poll_interval_seconds", 3)

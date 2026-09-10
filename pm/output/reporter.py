@@ -1,7 +1,13 @@
+import os
+import re
 from datetime import date
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
+from urllib.parse import quote
 from pm.models import AllocationResult, ReconciliationSummary
+
+_RUN_DIR_RE = re.compile(r"^[A-Z0-9._-]+_\d{8}_\d{6}$")
+_RUN_DIR_DATE_RE = re.compile(r"_(\d{4})(\d{2})(\d{2})_\d{6}")
 
 
 class MarkdownTradeReporter:
@@ -9,8 +15,81 @@ class MarkdownTradeReporter:
     Generates the structured Obsidian Trade Orders report: Trade_Orders_YYYY-MM-DD.md.
     """
 
-    def __init__(self, output_dir: str):
+    def __init__(
+        self,
+        output_dir: str,
+        link_style: str = "markdown",
+        prefer_complete_report: bool = True,
+        date_layout: str = "stacked",
+    ):
         self.output_dir = Path(output_dir)
+        self.link_style = link_style
+        self.prefer_complete_report = prefer_complete_report
+        self.date_layout = date_layout
+
+    def _report_md_link(
+        self,
+        ticker: str,
+        source_path: Optional[str] = None,
+        report_date: Optional[Union[date, str]] = None,
+        bold: bool = True,
+        include_date: bool = True,
+    ) -> str:
+        """
+        Return a table-safe Markdown link to the source agent report, optionally
+        accompanied by an ~8pt report date (YYYY-MM-DD), or the bare ticker
+        when no report is available.
+
+        Example (stacked):
+        **[AAPL](../01_agent_reports/AAPL/AAPL_20260905_105303/complete_report.md)**<br><span style="font-size: 8pt; opacity: 0.7;">2026-09-05</span>
+        """
+        if not source_path:
+            return f"**{ticker}**" if bold else ticker
+
+        target = Path(source_path)
+
+        # Walk up to the run folder (<TICKER>_<YYYYMMDD>_<HHMMSS>)
+        run_dir = next(
+            (p for p in (target.parent, *target.parents) if _RUN_DIR_RE.match(p.name)),
+            None,
+        )
+        if self.prefer_complete_report and run_dir is not None and (run_dir / "complete_report.md").exists():
+            target = run_dir / "complete_report.md"
+
+        # Resolve date string if requested
+        date_str = None
+        if include_date:
+            if report_date is not None:
+                date_str = report_date.isoformat() if hasattr(report_date, "isoformat") else str(report_date)
+            elif run_dir is not None:
+                match = _RUN_DIR_DATE_RE.search(run_dir.name)
+                if match:
+                    date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+
+        # Compute relative path to vault output directory
+        try:
+            rel = os.path.relpath(target, start=str(self.output_dir)).replace(os.sep, "/")
+        except ValueError:
+            rel = str(target).replace(os.sep, "/")
+
+        # Format link base
+        if self.link_style == "wikilink":
+            link = f"[[{rel}\\|{ticker}]]"
+        elif self.link_style == "none":
+            link = ticker
+        else:
+            link = f"[{ticker}]({quote(rel)})"
+
+        linked_ticker = f"**{link}**" if bold else link
+
+        if date_str and self.link_style != "none":
+            date_badge = f'<span style="font-size: 8pt; opacity: 0.7;">{date_str}</span>'
+            if self.date_layout == "stacked":
+                return f"{linked_ticker}<br>{date_badge}"
+            else:
+                return f"{linked_ticker} {date_badge}"
+
+        return linked_ticker
 
     def generate_report_markdown(self, summary: ReconciliationSummary) -> str:
         lines: List[str] = []
@@ -49,8 +128,9 @@ class MarkdownTradeReporter:
                 curr_shares_str = f"{a.current_shares:g}"
                 order_shares_str = f"{a.order_shares:g}"
                 action_badge = "**SELL** 🔴" if a.action == "SELL" else "**BUY** 🟢"
+                ticker_cell = self._report_md_link(a.ticker, a.report_path, a.report_date, bold=True, include_date=True)
                 lines.append(
-                    f"| **[[{a.ticker}]]** | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_badge} | **{order_shares_str}** | {a.reason} |"
+                    f"| {ticker_cell} | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_badge} | **{order_shares_str}** | {a.reason} |"
                 )
             lines.append("")
 
@@ -77,8 +157,9 @@ class MarkdownTradeReporter:
                 else:
                     status_badge = f"🟡 **WARNING ({s.days_remaining}d left)** — Queue this week"
 
+                ticker_cell = self._report_md_link(s.ticker, s.source_path, s.date, bold=True, include_date=False)
                 lines.append(
-                    f"| **[[{s.ticker}]]** | {s.date.isoformat()} | {s.age_days} days | {s.days_remaining} days | {s.signal.value} | {in_port_str} | {status_badge} |"
+                    f"| {ticker_cell} | {s.date.isoformat()} | {s.age_days} days | {s.days_remaining} days | {s.signal.value} | {in_port_str} | {status_badge} |"
                 )
             lines.append("")
 
@@ -99,10 +180,10 @@ class MarkdownTradeReporter:
             else:
                 action_display = "HOLD 🟡"
 
+            ticker_cell = self._report_md_link(a.ticker, a.report_path, a.report_date, bold=True, include_date=True)
             lines.append(
-                f"| **[[{a.ticker}]]** | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_display} | {order_shares_str} | {a.reason} |"
+                f"| {ticker_cell} | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_display} | {order_shares_str} | {a.reason} |"
             )
-
 
         lines.append("")
 
@@ -115,7 +196,16 @@ class MarkdownTradeReporter:
         alloc_by_ticker = {a.ticker: a for a in summary.allocations}
         for c_id, members in sorted(summary.clusters.items()):
             c_weight = sum(alloc_by_ticker[m].target_weight for m in members if m in alloc_by_ticker)
-            assets_str = ", ".join(f"[[{m}]]" for m in sorted(members))
+            assets_str = ", ".join(
+                self._report_md_link(
+                    m,
+                    alloc_by_ticker[m].report_path if m in alloc_by_ticker else None,
+                    alloc_by_ticker[m].report_date if m in alloc_by_ticker else None,
+                    bold=False,
+                    include_date=False,
+                )
+                for m in sorted(members)
+            )
             status = "✅ OK" if c_weight <= 25.01 else "⚠️ CAPPED"
             lines.append(f"| {c_id} | {assets_str} | {c_weight:.2f}% | 25.00% | {status} |")
 
@@ -131,3 +221,4 @@ class MarkdownTradeReporter:
         content = self.generate_report_markdown(summary)
         target_path.write_text(content, encoding="utf-8")
         return target_path
+

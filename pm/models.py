@@ -78,6 +78,8 @@ class AllocationResult:
     order_shares: float
     is_whole_share: bool
     reason: str
+    report_path: Optional[str] = None
+    report_date: Optional[date] = None
 
 
 @dataclass
@@ -94,3 +96,47 @@ class ReconciliationSummary:
     expired_signals: List[ParsedSignal] = field(default_factory=list)
     max_age_days: int = 14
     execution_date: date = field(default_factory=date.today)
+
+
+@dataclass
+class TriageItem:
+    ticker: str
+    category: str
+    asset_type: str
+    analysts: List[str]
+    in_portfolio: bool
+    status: str  # "MISSING", "EXPIRED", "STALE_SOON", "FRESH"
+    priority: int  # 1 (highest) to 5 (fresh/skip)
+    age_days: Optional[int] = None
+    days_remaining: Optional[int] = None
+    current_signal: Optional[SignalType] = None
+    reason: str = ""
+
+
+@dataclass
+class TriagePlan:
+    items: List[TriageItem]
+    execution_date: date = field(default_factory=date.today)
+
+    @property
+    def queue(self) -> List[TriageItem]:
+        """Returns items needing agent evaluation, sorted by priority (ascending: 1, 2, ...)."""
+        return sorted([it for it in self.items if it.priority < 5], key=lambda x: (x.priority, x.ticker))
+
+    @property
+    def fresh_items(self) -> List[TriageItem]:
+        return [it for it in self.items if it.priority >= 5]
+
+    @property
+    def summary_counts(self) -> Dict[str, int]:
+        counts = {"MISSING": 0, "EXPIRED": 0, "STALE_SOON": 0, "FRESH": 0}
+        for it in self.items:
+            counts[it.status] = counts.get(it.status, 0) + 1
+        return counts
+
+    def get_queue(self, limit: Optional[int] = None) -> List[TriageItem]:
+        q = self.queue
+        if limit is not None and limit > 0:
+            return q[:limit]
+        return q
+

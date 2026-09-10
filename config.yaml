@@ -1,12 +1,14 @@
 paths:
-  reports_dir: "/Users/matthewhope/reports"
+  reports_dir: "/Users/matthewhope/github_projects/portfolio-manager/portfolio/01_agent_reports"
   downloads_dir: "/Users/matthewhope/Downloads"
-  obsidian_vault_dir: "/Users/matthewhope/reports"
+  obsidian_vault_dir: "/Users/matthewhope/github_projects/portfolio-manager/portfolio/00_trade_orders"
 
 signals:
   max_age_days: 14               # Reports older than 14 days are expired
   stale_warning_days: 4          # Alert if report expires in <= 4 days (i.e. age >= 10 days)
   candidate_min_signal: "OVERWEIGHT"
+  restrict_candidates_to_watchlist: true # Enforce that only tickers in stocks.csv or holdings enter investable universe
+  excluded_tickers: []           # Explicit blacklist of tickers that will never enter the universe or receive capital
 
 # Equivalent share classes (e.g. Alphabet Class C and Class A)
 # If one is already held in the portfolio, the other is merged to prevent double allocation.
@@ -58,3 +60,36 @@ rebalance:
 watcher:
   poll_interval_seconds: 3       # Check Downloads folder every 3 seconds
   debounce_seconds: 2            # Wait after file write finishes before running solver
+
+# ==============================================================================
+# Watchlist Configuration for TradingAgents Research Pipeline
+# ==============================================================================
+watchlist:
+  auto_triage: true                  # Automatically scan for missing/stale reports
+  stocks_file: "stocks.csv"          # Primary equities list file (47 securities)
+  max_batch_size: 5                  # Max tickers to evaluate in a single batch
+  rate_limit_delay_seconds: 5.0      # Pause between ticker agent runs (5.0s per Gemini batch)
+  # Categories can be used to define additional security groups if desired in the future.
+  categories: {}
+
+# ==============================================================================
+# TradingAgents Agent Engine Configuration
+# ==============================================================================
+tradingagents:
+  llm_provider: "google"             # Google Gemini
+  quick_think_llm: "gemini-3.1-flash-lite"
+  deep_think_llm: "gemini-3.5-flash"
+  google_thinking_level: "high"
+  max_debate_rounds: 5               # "Deep" research depth (5 debate rounds)
+  max_risk_discuss_rounds: 5         # "Deep" research depth (5 risk rounds)
+  checkpoint_enabled: false
+
+# ==============================================================================
+# Obsidian Markdown Output Configuration
+# ==============================================================================
+output:
+  report_link_style: "markdown"    # "markdown" | "wikilink" | "none"
+  prefer_complete_report: true     # link complete_report.md over decision.md
+  date_layout: "stacked"           # "stacked" (with <br>) | "inline"
+
+

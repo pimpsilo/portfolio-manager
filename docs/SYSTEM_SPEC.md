@@ -111,23 +111,26 @@ Reconcile target weights against current holdings using **Option B (Relative Dri
 
 ## 5. Output Directives & Obsidian Reporting (`pm/output/reporter.py`)
 Generate a structured Markdown document and write it to the Obsidian vault as:
-`/Users/matthewhope/reports/Trade_Orders_YYYY-MM-DD.md`
+`Trade_Orders_YYYY-MM-DD.md`
 
 ### Required Format & Structure:
 1. **Header Block:**
    `# Trade Execution Orders — YYYY-MM-DD`
    Summary callout with Live Portfolio Value, Current Cash ($ and %), and Projected Ending Cash ($ and %).
 2. **Actionable Directives Table (Trims/Sells first, then Buys):**
+   Ticker cells contain a table-safe Markdown link to the ticker's agent report with an ~8pt report date badge (`YYYY-MM-DD`):
    ```markdown
-   | Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares |
-   | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-   | **[[META]]** | 30 | $610.68 | 2.73% | $10,047.37 | $-8,273.03 | **SELL** 🔴 | **14** |
-   | **[[ADBE]]** | 0 | $285.75 | 2.73% | $10,047.37 | $+10,047.37 | **BUY** 🟢 | **35** |
+   | Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares | Directive Rationale |
+   | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+   | **[META](../01_agent_reports/META/META_20260905_113036/complete_report.md)**<br><span style="font-size: 8pt; opacity: 0.7;">2026-09-05</span> | 30 | $610.68 | 2.73% | $10,047.37 | $-8,273.03 | **SELL** 🔴 | **14** | ... |
+   | **[ADBE](../01_agent_reports/ADBE/ADBE_20260905_105416/complete_report.md)**<br><span style="font-size: 8pt; opacity: 0.7;">2026-09-05</span> | 0 | $285.75 | 2.73% | $10,047.37 | $+10,047.37 | **BUY** 🟢 | **35** | ... |
    ```
-3. **Full Portfolio Rebalance & Drift Ledger:**
-   Complete ledger of all assets including `HOLD 🟡` positions.
-4. **Correlated Clusters Exposure Table:**
-   Cluster ID, Member Assets (wikilinked), Combined Target Weight %, Cap Limit (25.00%), and Status (`✅ OK`).
+3. **Aging & Approaching Stale Reports Table:**
+   Links ticker to agent report (`**[TICKER](relpath)**`), with adjacent dedicated columns for Report Date, Report Age, and Days Left.
+4. **Full Portfolio Rebalance & Drift Ledger:**
+   Complete ledger of all assets including `HOLD 🟡` positions, with linked tickers and ~8pt report dates.
+5. **Correlated Clusters Exposure Table:**
+   Cluster ID, Member Assets (individual Markdown report links, comma-separated), Combined Target Weight %, Cap Limit (25.00%), and Status (`✅ OK`).
 
 ---
 

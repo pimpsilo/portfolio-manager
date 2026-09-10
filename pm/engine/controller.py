@@ -1,6 +1,7 @@
 import logging
 import math
 from datetime import date
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 import yaml
 
@@ -70,6 +71,11 @@ class PortfolioManagerEngine:
             multipliers=multipliers,
             market_cap_cfg=market_cap_cfg,
         )
+        self.config_path = config_path
+        self.watchlist_cfg = self.config.get("watchlist", {})
+        self.restrict_candidates_to_watchlist = signals_cfg.get("restrict_candidates_to_watchlist", True)
+        self.excluded_tickers = set(signals_cfg.get("excluded_tickers", []))
+
         stepping_cfg = rebalance_cfg.get("stepping", {})
         self.reconciler = PortfolioReconciler(
             relative_threshold=rebalance_cfg.get("relative_threshold", 0.20),
@@ -83,6 +89,28 @@ class PortfolioManagerEngine:
             max_trade_dollar_cap=stepping_cfg.get("max_trade_dollar_cap", 6000.0),
             avoid_step_factor=stepping_cfg.get("avoid_step_factor", 1.00),
         )
+
+    def _load_allowed_candidates(self) -> Set[str]:
+        """Loads allowed candidate tickers from stocks_file and active watchlist categories."""
+        allowed: Set[str] = set()
+        watchlist_cfg = getattr(self, "watchlist_cfg", self.config.get("watchlist", {}))
+        stocks_file_val = watchlist_cfg.get("stocks_file")
+        if stocks_file_val:
+            s_path = Path(stocks_file_val)
+            if not s_path.is_absolute():
+                base_dir = Path(getattr(self, "config_path", "config.yaml")).resolve().parent
+                s_path = (base_dir / s_path).resolve()
+            if s_path.exists():
+                for line in s_path.read_text(encoding="utf-8-sig").splitlines():
+                    t = line.strip().upper()
+                    if t and not t.startswith("#"):
+                        allowed.add(t)
+
+        for cat_name, cat_data in watchlist_cfg.get("categories", {}).items():
+            if cat_data.get("investable", True) and cat_data.get("asset_type") != "bond":
+                for t in cat_data.get("tickers", []):
+                    allowed.add(t.strip().upper())
+        return allowed
 
     def run_solver(
         self,
@@ -138,11 +166,22 @@ class PortfolioManagerEngine:
         expired_signals.sort(key=lambda s: (not s.in_portfolio, -s.age_days))
 
         # 2. Form Investable Universe:
-        # Current holdings + Non-portfolio candidates with active OVERWEIGHT signals (deduplicated against holdings)
+        # Current holdings + Allowed non-portfolio candidates with active OVERWEIGHT signals (deduplicated against holdings)
         universe_tickers = set(portfolio_state.holdings.keys())
+        allowed_candidates = self._load_allowed_candidates()
+        signals_cfg = getattr(self, "config", {}).get("signals", {})
+        restrict_watchlist = getattr(self, "restrict_candidates_to_watchlist", signals_cfg.get("restrict_candidates_to_watchlist", True))
+        excluded_tickers = getattr(self, "excluded_tickers", set(signals_cfg.get("excluded_tickers", [])))
+
         for ticker, sig in parsed_signals.items():
             canonical = alias_map.get(ticker, ticker)
             if canonical in portfolio_state.holdings:
+                continue
+            if canonical in excluded_tickers or ticker in excluded_tickers:
+                logger.info(f"Skipping excluded candidate ticker: {ticker} ({canonical})")
+                continue
+            if restrict_watchlist and (canonical not in allowed_candidates and ticker not in allowed_candidates):
+                logger.debug(f"Ignoring non-watchlist report for candidate: {ticker} ({canonical})")
                 continue
             if not sig.is_expired and sig.signal == self.candidate_min_signal:
                 universe_tickers.add(canonical)
@@ -233,6 +272,14 @@ class PortfolioManagerEngine:
         total_buys = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "BUY")
         total_sells = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "SELL")
         projected_ending_cash = portfolio_state.cash_balance + total_sells - total_buys
+
+        # Attach newest source report path & date for traceability / report links
+        report_path_by_ticker = {t: s.source_path for t, s in parsed_signals.items() if s.source_path}
+        report_date_by_ticker = {t: s.date for t, s in parsed_signals.items() if s.date}
+        for a in allocations:
+            canonical = alias_map.get(a.ticker, a.ticker)
+            a.report_path = report_path_by_ticker.get(a.ticker) or report_path_by_ticker.get(canonical)
+            a.report_date = report_date_by_ticker.get(a.ticker) or report_date_by_ticker.get(canonical)
 
         return ReconciliationSummary(
             total_portfolio_value=total_live_portfolio_value,
