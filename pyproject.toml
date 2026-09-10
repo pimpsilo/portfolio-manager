@@ -20,6 +20,9 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
 ]
+agents = [
+    "tradingagents",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
