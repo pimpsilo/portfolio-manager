@@ -4,7 +4,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Optional, Union
 from urllib.parse import quote
-from pm.models import AllocationResult, ReconciliationSummary
+from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType
 
 _RUN_DIR_RE = re.compile(r"^[A-Z0-9._-]+_\d{8}_\d{6}$")
 _RUN_DIR_DATE_RE = re.compile(r"_(\d{4})(\d{2})(\d{2})_\d{6}")
@@ -21,11 +21,13 @@ class MarkdownTradeReporter:
         link_style: str = "markdown",
         prefer_complete_report: bool = True,
         date_layout: str = "stacked",
+        append_daily_snapshots: bool = True,
     ):
         self.output_dir = Path(output_dir)
         self.link_style = link_style
         self.prefer_complete_report = prefer_complete_report
         self.date_layout = date_layout
+        self.append_daily_snapshots = append_daily_snapshots
 
     def _report_md_link(
         self,
@@ -91,11 +93,32 @@ class MarkdownTradeReporter:
 
         return linked_ticker
 
-    def generate_report_markdown(self, summary: ReconciliationSummary) -> str:
+    @staticmethod
+    def _rating_badge(signal_val: SignalType) -> str:
+        if signal_val == SignalType.OVERWEIGHT:
+            return "OVERWEIGHT 🟢"
+        elif signal_val == SignalType.EQUAL_WEIGHT:
+            return "HOLD 🟡"
+        elif signal_val == SignalType.UNDERWEIGHT:
+            return "UNDERWEIGHT 🟠"
+        elif signal_val == SignalType.AVOID:
+            return "AVOID 🔴"
+        return str(signal_val.value if hasattr(signal_val, "value") else signal_val)
+
+    def _snapshot_header(self, summary: ReconciliationSummary) -> str:
+        if summary.download_time and summary.source_file:
+            return f"## ⏱️ Snapshot: {summary.download_time} (Source: `{summary.source_file}`)"
+        elif summary.download_time:
+            return f"## ⏱️ Snapshot: {summary.download_time}"
+        elif summary.source_file:
+            return f"## ⏱️ Snapshot: (Source: `{summary.source_file}`)"
+        else:
+            return "## ⏱️ Snapshot: Portfolio Reconciliation"
+
+    def generate_snapshot_markdown(self, summary: ReconciliationSummary) -> str:
         lines: List[str] = []
 
-        exec_date = summary.execution_date.isoformat()
-        lines.append(f"# Trade Execution Orders — {exec_date}")
+        lines.append(self._snapshot_header(summary))
         lines.append("")
         live_val = f"${summary.total_portfolio_value:,.2f}"
         curr_cash = f"${summary.current_cash:,.2f}"
@@ -103,14 +126,26 @@ class MarkdownTradeReporter:
         end_cash = f"${summary.projected_ending_cash:,.2f}"
         end_cash_pct = f"{summary.projected_ending_cash/summary.total_portfolio_value*100:.1f}%"
         lines.append(f"> **Portfolio Live Value**: **{live_val}** | **Current Cash**: **{curr_cash}** ({curr_cash_pct}) | **Projected Ending Cash**: **{end_cash}** ({end_cash_pct})")
+
+        meta_items = []
+        if summary.source_file:
+            meta_items.append(f"**Source Export**: `{summary.source_file}`")
+        if summary.download_time:
+            meta_items.append(f"**Downloaded**: {summary.download_time}")
+        if summary.execution_timestamp:
+            meta_items.append(f"**Solver Run**: {summary.execution_timestamp}")
+        if meta_items:
+            lines.append(f"> {' | '.join(meta_items)}")
         lines.append("")
 
-        # 1. Active Directives Section
-        active_orders = [a for a in summary.allocations if a.action in ("BUY", "SELL") and a.order_shares > 0]
-        sells = [a for a in active_orders if a.action == "SELL"]
-        buys = [a for a in active_orders if a.action == "BUY"]
+        alloc_by_ticker = {a.ticker: a for a in summary.allocations}
 
-        lines.append("## 🎯 Execution Directives (Actionable Trades)")
+        # 1. Immediate / Daily Actions (sell orders then buy orders, alphabetically by ticker)
+        active_orders = [a for a in summary.allocations if a.action in ("BUY", "SELL") and a.order_shares > 0]
+        sells = sorted([a for a in active_orders if a.action == "SELL"], key=lambda a: a.ticker)
+        buys = sorted([a for a in active_orders if a.action == "BUY"], key=lambda a: a.ticker)
+
+        lines.append("## 🎯 1. Immediate / Daily Actions")
         lines.append("")
         if not active_orders:
             lines.append("*All positions are aligned within risk and drift bands. Zero trades required today.*")
@@ -134,8 +169,8 @@ class MarkdownTradeReporter:
                 )
             lines.append("")
 
-        # 2. Aging & Approaching Stale Reports Section (Placed right after Directives and before Ledger)
-        lines.append("## ⏳ Aging & Approaching Stale Reports (Needs Re-evaluation)")
+        # 2. Aging / Stale Reports Summary
+        lines.append("## ⏳ 2. Aging / Stale Reports Summary")
         lines.append("")
         lines.append(f"> Reports older than **{summary.max_age_days} days** are considered stale. The items below require a fresh `tradingagents` analysis run before their signals expire.")
         lines.append("")
@@ -163,8 +198,8 @@ class MarkdownTradeReporter:
                 )
             lines.append("")
 
-        # 3. Full Allocation Table
-        lines.append("## 📊 Full Portfolio Rebalance & Drift Ledger")
+        # 3. Full Portfolio Rebalance & Drift Ledger
+        lines.append("## 📊 3. Full Portfolio Rebalance & Drift Ledger")
         lines.append("")
         lines.append("| Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares | Drift / Protection Rationale |")
         lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
@@ -187,13 +222,123 @@ class MarkdownTradeReporter:
 
         lines.append("")
 
-        # 4. Cluster Exposures
+        # 4. Non-Portfolio Securities with Active Agent Reports & Status
+        lines.append("## 🌐 4. Non-Portfolio Securities with Active Agent Reports & Status")
+        lines.append("")
+
+        # Gather unheld signals
+        non_port_signals: List[ParsedSignal] = []
+        if summary.all_signals:
+            non_port_signals = [s for s in summary.all_signals if not s.in_portfolio]
+        else:
+            non_port_signals = [s for s in summary.aging_signals + summary.expired_signals if not s.in_portfolio]
+
+        non_port_signals.sort(key=lambda s: s.ticker)
+
+        if not non_port_signals:
+            lines.append("*No unheld securities with agent reports found.*")
+            lines.append("")
+        else:
+            lines.append("| Ticker | Current Rating | Target Price | Report Date | Report Age | Days Left | Portfolio Status & Guidance |")
+            lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :--- |")
+
+            for s in non_port_signals:
+                rating_badge = self._rating_badge(s.signal)
+                tp_str = f"${s.target_price:,.2f}" if s.target_price is not None else "—"
+                alloc = alloc_by_ticker.get(s.ticker)
+
+                if s.is_expired:
+                    status_guidance = "🛑 Expired (>14d) — Inactive candidate; queue fresh agent evaluation"
+                elif s.signal == SignalType.OVERWEIGHT:
+                    if alloc and alloc.action == "BUY":
+                        status_guidance = f"🟢 Buy Directive — Target {alloc.target_weight:.2f}% (${alloc.target_value:,.2f}), Order {alloc.order_shares:g} shs"
+                    elif alloc and alloc.action == "HOLD":
+                        status_guidance = f"🟡 Candidate Held — {alloc.reason}"
+                    else:
+                        status_guidance = "🟢 Active Candidate — Overweight signal; awaiting entry allocation"
+                elif s.signal == SignalType.EQUAL_WEIGHT:
+                    if s.is_approaching_stale:
+                        status_guidance = f"🟡 Watchlist (Hold) — Neutral; {s.days_remaining}d left before re-evaluation"
+                    else:
+                        status_guidance = "Watchlist (Hold) — Neutral; awaiting Overweight catalyst for entry"
+                elif s.signal == SignalType.UNDERWEIGHT:
+                    status_guidance = "Watchlist (Underweight) — Defensive stance; ineligible for capital entry"
+                elif s.signal == SignalType.AVOID:
+                    status_guidance = "Watchlist (Avoid) — Ineligible for capital entry"
+                else:
+                    status_guidance = "Watchlist — Monitoring"
+
+                age_badge = f"{s.age_days} days"
+                days_left_badge = f"🟡 **{s.days_remaining}d**" if s.is_approaching_stale else (f"{s.days_remaining} days" if not s.is_expired else "🛑 Expired")
+                ticker_cell = self._report_md_link(s.ticker, s.source_path, s.date, bold=True, include_date=False)
+
+                lines.append(
+                    f"| {ticker_cell} | {rating_badge} | {tp_str} | {s.date.isoformat()} | {age_badge} | {days_left_badge} | {status_guidance} |"
+                )
+            lines.append("")
+
+        # 5. All Securities with Agent Reports (Alphabetical by Ticker)
+        lines.append("## 📋 5. All Securities with Agent Reports")
+        lines.append("")
+        lines.append("> Complete directory of all securities with agent research reports on file, including analyst verdicts, price targets, core guidance summaries, and current portfolio participation.")
+        lines.append("")
+
+        all_sigs = list(summary.all_signals) if summary.all_signals else []
+        if not all_sigs:
+            # Fallback if all_signals wasn't passed
+            seen = set()
+            for s in summary.aging_signals + summary.expired_signals:
+                if s.ticker not in seen:
+                    all_sigs.append(s)
+                    seen.add(s.ticker)
+            for a in summary.allocations:
+                if a.ticker not in seen:
+                    all_sigs.append(ParsedSignal(
+                        ticker=a.ticker,
+                        signal=a.signal,
+                        date=a.report_date or summary.execution_date,
+                        source_path=a.report_path or "",
+                        raw_rating=a.signal.value,
+                        in_portfolio=a.current_shares > 0,
+                    ))
+                    seen.add(a.ticker)
+
+        all_sigs.sort(key=lambda s: s.ticker)
+
+        if not all_sigs:
+            lines.append("*No agent reports on file.*")
+            lines.append("")
+        else:
+            lines.append("| Ticker | Verdict / Rating | Price Target | Portfolio Participation | Core Guidance Summary |")
+            lines.append("| :--- | :---: | :---: | :--- | :--- |")
+
+            for s in all_sigs:
+                rating_badge = self._rating_badge(s.signal)
+                tp_str = f"${s.target_price:,.2f}" if s.target_price is not None else "—"
+                alloc = alloc_by_ticker.get(s.ticker)
+
+                if s.in_portfolio and alloc and alloc.current_shares > 0:
+                    participation = f"**Held** ({alloc.current_shares:g} shs · {alloc.current_weight:.2f}%)"
+                elif s.in_portfolio:
+                    participation = "**Held** (0 shs)"
+                else:
+                    participation = "No (0 shs · Watchlist)"
+
+                guidance = s.core_guidance.strip() if s.core_guidance else "No executive summary provided."
+                guidance_clean = " ".join(guidance.split()).replace("|", "-")
+
+                ticker_cell = self._report_md_link(s.ticker, s.source_path, s.date, bold=True, include_date=False)
+                lines.append(
+                    f"| {ticker_cell} | {rating_badge} | {tp_str} | {participation} | {guidance_clean} |"
+                )
+            lines.append("")
+
+        # 6. Cluster Exposures
         lines.append("## 🔗 Correlated Asset Clusters & Exposure")
         lines.append("")
         lines.append("| Cluster ID | Group Assets | Combined Target Weight | Cap Limit | Status |")
         lines.append("| :---: | :--- | :---: | :---: | :---: |")
 
-        alloc_by_ticker = {a.ticker: a for a in summary.allocations}
         for c_id, members in sorted(summary.clusters.items()):
             c_weight = sum(alloc_by_ticker[m].target_weight for m in members if m in alloc_by_ticker)
             assets_str = ", ".join(
@@ -212,13 +357,57 @@ class MarkdownTradeReporter:
         lines.append("")
         return "\n".join(lines)
 
-    def write_report(self, summary: ReconciliationSummary, filename: Optional[str] = None) -> Path:
+    def generate_report_markdown(self, summary: ReconciliationSummary) -> str:
+        exec_date = summary.execution_date.isoformat()
+        return f"# Trade Execution Orders — {exec_date}\n\n" + self.generate_snapshot_markdown(summary)
+
+    def write_report(
+        self,
+        summary: ReconciliationSummary,
+        filename: Optional[str] = None,
+        overwrite: bool = False,
+    ) -> Path:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         if not filename:
             filename = f"Trade_Orders_{summary.execution_date.isoformat()}.md"
 
         target_path = self.output_dir / filename
-        content = self.generate_report_markdown(summary)
-        target_path.write_text(content, encoding="utf-8")
+
+        if overwrite or not self.append_daily_snapshots or not target_path.exists():
+            content = self.generate_report_markdown(summary)
+            target_path.write_text(content, encoding="utf-8")
+            return target_path
+
+        existing_content = target_path.read_text(encoding="utf-8")
+        if not existing_content.strip() or "## ⏱️ Snapshot:" not in existing_content:
+            content = self.generate_report_markdown(summary)
+            target_path.write_text(content, encoding="utf-8")
+            return target_path
+
+        snapshot_body = self.generate_snapshot_markdown(summary)
+        source_id = summary.source_file
+
+        # If source_id is present and already in existing_content, replace that snapshot block idempotently
+        if source_id and (f"`{source_id}`" in existing_content or source_id in existing_content):
+            blocks = re.split(r"\n+---\n+", existing_content)
+            new_blocks = []
+            replaced = False
+            for i, block in enumerate(blocks):
+                if source_id in block:
+                    if i == 0 and block.startswith("# "):
+                        first_line = block.splitlines()[0]
+                        new_blocks.append(f"{first_line}\n\n{snapshot_body}")
+                    else:
+                        new_blocks.append(snapshot_body)
+                    replaced = True
+                else:
+                    new_blocks.append(block)
+            if replaced:
+                target_path.write_text("\n\n---\n\n".join(new_blocks).rstrip() + "\n", encoding="utf-8")
+                return target_path
+
+        # If not previously recorded, append new snapshot block separated by horizontal rule
+        new_content = existing_content.rstrip() + "\n\n---\n\n" + snapshot_body + "\n"
+        target_path.write_text(new_content, encoding="utf-8")
         return target_path
 

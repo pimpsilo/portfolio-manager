@@ -1,6 +1,7 @@
 import logging
 import math
-from datetime import date
+import re
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 import yaml
@@ -120,12 +121,27 @@ class PortfolioManagerEngine:
         """
         Executes the complete deterministic 5-step capital allocation loop.
         """
-        if as_of_date is None:
-            as_of_date = date.today()
-
         # 1. Ingest Data
         logger.info("Ingesting broker CSV portfolio state...")
         portfolio_state = self.csv_parser.parse(csv_path)
+
+        if as_of_date is None:
+            csv_date = None
+            if portfolio_state.download_time:
+                m = re.search(r"([A-Za-z]{3})-(\d{1,2})-(\d{4})", portfolio_state.download_time)
+                if m:
+                    try:
+                        csv_date = datetime.strptime(f"{m.group(1)}-{m.group(2)}-{m.group(3)}", "%b-%d-%Y").date()
+                    except ValueError:
+                        pass
+            if not csv_date and portfolio_state.source_file:
+                m = re.search(r"([A-Za-z]{3})-(\d{1,2})-(\d{4})", portfolio_state.source_file)
+                if m:
+                    try:
+                        csv_date = datetime.strptime(f"{m.group(1)}-{m.group(2)}-{m.group(3)}", "%b-%d-%Y").date()
+                    except ValueError:
+                        pass
+            as_of_date = csv_date if csv_date else date.today()
 
         logger.info("Ingesting Markdown analyst signals from vault...")
         parsed_signals = self.signal_parser.parse_all_signals(as_of_date=as_of_date)
@@ -153,27 +169,38 @@ class PortfolioManagerEngine:
                         logger.info(f"Adopting signal {alias_sig.signal.value} from equivalent symbol {alias_sym} for {canonical_sym}")
                         parsed_signals[canonical_sym] = alias_sig
 
-        # Mark in_portfolio flag on signals
-        for ticker, sig in parsed_signals.items():
-            canonical = alias_map.get(ticker, ticker)
-            sig.in_portfolio = canonical in portfolio_state.holdings
-
-        # Identify Aging (Almost Stale) and Expired Signals
-        aging_signals = [s for s in parsed_signals.values() if s.is_approaching_stale and s.ticker not in alias_map]
-        aging_signals.sort(key=lambda s: (not s.in_portfolio, s.days_remaining))
-
-        expired_signals = [s for s in parsed_signals.values() if s.is_expired and s.ticker not in alias_map]
-        expired_signals.sort(key=lambda s: (not s.in_portfolio, -s.age_days))
-
-        # 2. Form Investable Universe:
-        # Current holdings + Allowed non-portfolio candidates with active OVERWEIGHT signals (deduplicated against holdings)
-        universe_tickers = set(portfolio_state.holdings.keys())
         allowed_candidates = self._load_allowed_candidates()
         signals_cfg = getattr(self, "config", {}).get("signals", {})
         restrict_watchlist = getattr(self, "restrict_candidates_to_watchlist", signals_cfg.get("restrict_candidates_to_watchlist", True))
         excluded_tickers = getattr(self, "excluded_tickers", set(signals_cfg.get("excluded_tickers", [])))
 
-        for ticker, sig in parsed_signals.items():
+        # Control universe: stocks.csv + held positions. Extraneous reports on disk (e.g. HLIT, SPY) are ignored.
+        if restrict_watchlist and allowed_candidates:
+            control_universe = set(portfolio_state.holdings.keys()) | allowed_candidates
+            control_signals = {
+                t: s for t, s in parsed_signals.items()
+                if (t in control_universe or alias_map.get(t, t) in control_universe)
+            }
+        else:
+            control_signals = parsed_signals
+
+        # Mark in_portfolio flag on signals
+        for ticker, sig in control_signals.items():
+            canonical = alias_map.get(ticker, ticker)
+            sig.in_portfolio = canonical in portfolio_state.holdings
+
+        # Identify Aging (Almost Stale) and Expired Signals within control universe
+        aging_signals = [s for s in control_signals.values() if s.is_approaching_stale and s.ticker not in alias_map]
+        aging_signals.sort(key=lambda s: (not s.in_portfolio, s.days_remaining))
+
+        expired_signals = [s for s in control_signals.values() if s.is_expired and s.ticker not in alias_map]
+        expired_signals.sort(key=lambda s: (not s.in_portfolio, -s.age_days))
+
+        # 2. Form Investable Universe:
+        # Current holdings + Allowed non-portfolio candidates with active OVERWEIGHT signals (deduplicated against holdings)
+        universe_tickers = set(portfolio_state.holdings.keys())
+
+        for ticker, sig in control_signals.items():
             canonical = alias_map.get(ticker, ticker)
             if canonical in portfolio_state.holdings:
                 continue
@@ -281,6 +308,11 @@ class PortfolioManagerEngine:
             a.report_path = report_path_by_ticker.get(a.ticker) or report_path_by_ticker.get(canonical)
             a.report_date = report_date_by_ticker.get(a.ticker) or report_date_by_ticker.get(canonical)
 
+        all_signals = sorted(
+            [s for s in control_signals.values() if s.ticker not in alias_map],
+            key=lambda s: s.ticker,
+        )
+
         return ReconciliationSummary(
             total_portfolio_value=total_live_portfolio_value,
             current_cash=portfolio_state.cash_balance,
@@ -292,6 +324,10 @@ class PortfolioManagerEngine:
             clusters=clusters,
             aging_signals=aging_signals,
             expired_signals=expired_signals,
+            all_signals=all_signals,
             max_age_days=self.max_age_days,
             execution_date=as_of_date,
+            source_file=portfolio_state.source_file,
+            download_time=portfolio_state.download_time,
+            execution_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )

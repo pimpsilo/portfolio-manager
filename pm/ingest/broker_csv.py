@@ -1,5 +1,6 @@
 import csv
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 from pm.models import Holding, PortfolioState
@@ -53,6 +54,12 @@ class BrokerCSVParser:
 
         if not target_path or not target_path.exists():
             raise FileNotFoundError(f"Could not locate broker CSV file at {target_path or self.downloads_dir}")
+
+        source_file = target_path.name
+        try:
+            file_mtime = target_path.stat().st_mtime
+        except OSError:
+            file_mtime = None
 
         cash_balance = 0.0
         holdings: Dict[str, Holding] = {}
@@ -127,10 +134,23 @@ class BrokerCSVParser:
         total_value = equity_value + cash_balance
         cash_pct = (cash_balance / total_value * 100.0) if total_value > 0 else 0.0
 
+        download_time: Optional[str] = None
+        if as_of_date:
+            m = re.search(r"Date downloaded\s+(.*)", as_of_date, re.IGNORECASE)
+            if m:
+                download_time = m.group(1).strip()
+            else:
+                download_time = as_of_date.strip()
+        elif file_mtime is not None:
+            download_time = datetime.fromtimestamp(file_mtime).strftime("%b-%d-%Y %I:%M %p")
+
         return PortfolioState(
             total_account_value=total_value,
             cash_balance=cash_balance,
             cash_percent=cash_pct,
             holdings=holdings,
             as_of_date=as_of_date,
+            source_file=source_file,
+            download_time=download_time,
+            file_mtime=file_mtime,
         )

@@ -91,5 +91,6 @@ output:
   report_link_style: "markdown"    # "markdown" | "wikilink" | "none"
   prefer_complete_report: true     # link complete_report.md over decision.md
   date_layout: "stacked"           # "stacked" (with <br>) | "inline"
+  append_daily_snapshots: true     # append intra-day runs to Trade_Orders_YYYY-MM-DD.md
 
 

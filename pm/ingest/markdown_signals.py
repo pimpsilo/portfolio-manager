@@ -12,7 +12,10 @@ class MarkdownSignalParser:
     """
 
     FOLDER_PATTERN = re.compile(r"^([A-Z0-9]+)_(\d{8})_(\d{6})")
-    RATING_PATTERN = re.compile(r"\*\*(?:Rating|Recommendation)\*\*:\s*([^\n\r*]+)", re.IGNORECASE)
+    RATING_PATTERN = re.compile(
+        r"\*\*(?:Rating|Recommendation|Final\s+(?:Trading\s+)?Decision)(?:\*\*:\s*|:\s*\*\*?|\s*:\s*)([^\n\r*]+?)(?:\*\*|\n|\r|$)",
+        re.IGNORECASE,
+    )
     TARGET_PATTERN = re.compile(r"\*\*Price Target\*\*:\s*([0-9.,]+)", re.IGNORECASE)
     STOP_PATTERN = re.compile(r"\*\*Stop(?:-|\s*)Loss\*\*:\s*([0-9.,]+)", re.IGNORECASE)
 
@@ -20,6 +23,43 @@ class MarkdownSignalParser:
         self.reports_dir = Path(reports_dir)
         self.max_age_days = max_age_days
         self.stale_warning_days = stale_warning_days
+
+    def _extract_core_guidance(self, content: str) -> str:
+        # Look for Executive Summary or Decision Summary
+        m = re.search(
+            r"\*\*(?:Executive\s+Summary|Decision\s+Summary)(?:\*\*:\s*|:\s*\*\*?|\s*:\s*)([^\n\r]+(?:\n(?!\s*(?:#|\*\*[A-Z]))[^\n\r]+)*)",
+            content,
+            re.IGNORECASE,
+        )
+        if m:
+            raw = " ".join(m.group(1).split()).strip()
+            sent_m = re.match(r"(.*?[.!?])(?:\s+|$)", raw)
+            sent = sent_m.group(1) if sent_m else raw
+            return re.sub(r"\*+", "", sent).strip().replace("|", "-")
+
+        # Fallback: Final Instruction
+        m_inst = re.search(
+            r"\*\*(?:Final\s+Instruction[^\*]*)(?:\*\*:\s*|:\s*\*\*?|\s*:\s*)([^\n\r]+)",
+            content,
+            re.IGNORECASE,
+        )
+        if m_inst:
+            raw = " ".join(m_inst.group(1).split()).strip()
+            return re.sub(r"\*+", "", raw).strip().replace("|", "-")
+
+        # Fallback: Investment Thesis
+        m_thesis = re.search(
+            r"\*\*(?:Investment\s+Thesis)(?:\*\*:\s*|:\s*\*\*?|\s*:\s*)([^\n\r]+(?:\n(?!\s*(?:#|\*\*[A-Z]))[^\n\r]+)*)",
+            content,
+            re.IGNORECASE,
+        )
+        if m_thesis:
+            raw = " ".join(m_thesis.group(1).split()).strip()
+            sent_m = re.match(r"(.*?[.!?])(?:\s+|$)", raw)
+            sent = sent_m.group(1) if sent_m else raw
+            return re.sub(r"\*+", "", sent).strip().replace("|", "-")
+
+        return ""
 
     def parse_all_signals(self, as_of_date: Optional[date] = None) -> Dict[str, ParsedSignal]:
         """
@@ -59,6 +99,11 @@ class MarkdownSignalParser:
 
             content = target_file.read_text(encoding="utf-8", errors="ignore")
             rating_match = self.RATING_PATTERN.search(content)
+            if not rating_match and complete_file.exists() and complete_file != target_file:
+                content = complete_file.read_text(encoding="utf-8", errors="ignore")
+                target_file = complete_file
+                rating_match = self.RATING_PATTERN.search(content)
+
             if not rating_match:
                 continue
 
@@ -67,6 +112,9 @@ class MarkdownSignalParser:
 
             target_price = None
             tp_match = self.TARGET_PATTERN.search(content)
+            if not tp_match and complete_file.exists() and complete_file != target_file:
+                comp_content = complete_file.read_text(encoding="utf-8", errors="ignore")
+                tp_match = self.TARGET_PATTERN.search(comp_content)
             if tp_match:
                 try:
                     target_price = float(tp_match.group(1).replace(",", ""))
@@ -75,11 +123,19 @@ class MarkdownSignalParser:
 
             stop_loss = None
             sl_match = self.STOP_PATTERN.search(content)
+            if not sl_match and complete_file.exists() and complete_file != target_file:
+                comp_content = complete_file.read_text(encoding="utf-8", errors="ignore")
+                sl_match = self.STOP_PATTERN.search(comp_content)
             if sl_match:
                 try:
                     stop_loss = float(sl_match.group(1).replace(",", ""))
                 except ValueError:
                     pass
+
+            core_guidance = self._extract_core_guidance(content)
+            if not core_guidance and complete_file.exists() and complete_file != target_file:
+                comp_content = complete_file.read_text(encoding="utf-8", errors="ignore")
+                core_guidance = self._extract_core_guidance(comp_content)
 
             age_days = (as_of_date - report_date).days
             is_expired = self.max_age_days > 0 and age_days > self.max_age_days
@@ -98,6 +154,7 @@ class MarkdownSignalParser:
                 is_approaching_stale=is_approaching_stale,
                 is_expired=is_expired,
                 raw_rating=raw_rating,
+                core_guidance=core_guidance,
             )
 
             if ticker not in signals_by_ticker:

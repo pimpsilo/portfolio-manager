@@ -366,3 +366,58 @@ def test_triage_empty_categories_stocks_only(tmp_path):
         assert it.asset_type == "stock"
 
 
+def test_triage_ignores_extraneous_reports_not_in_stocks_or_holdings(tmp_path):
+    """
+    Ensures extraneous reports found on disk (e.g. HLIT, SPY) that are not in stocks.csv
+    and not held in portfolio holdings are completely ignored by triage.
+    """
+    stocks_file = tmp_path / "stocks.csv"
+    stocks_file.write_text("AAPL\nMSFT\n", encoding="utf-8")
+
+    cfg = {
+        "paths": {
+            "reports_dir": str(tmp_path / "reports"),
+            "downloads_dir": str(tmp_path / "downloads"),
+        },
+        "signals": {
+            "max_age_days": 14,
+            "stale_warning_days": 4,
+            "excluded_tickers": [],
+        },
+        "watchlist": {
+            "stocks_file": str(stocks_file),
+            "categories": {},
+        },
+    }
+
+    triage_engine = SignalTriageEngine(cfg)
+    mock_portfolio = PortfolioState(
+        total_account_value=10000.0,
+        cash_balance=10000.0,
+        cash_percent=100.0,
+        holdings={
+            "AAPL": Holding(symbol="AAPL", description="Apple", quantity=10, last_price=150, current_value=1500),
+        },
+    )
+
+    # Signal reports on disk include AAPL and extraneous HLIT / SPY
+    today = date.today()
+    mock_signals = {
+        "AAPL": ParsedSignal(ticker="AAPL", signal=SignalType.OVERWEIGHT, date=today, source_path=""),
+        "HLIT": ParsedSignal(ticker="HLIT", signal=SignalType.EQUAL_WEIGHT, date=today - timedelta(days=11), source_path=""),
+        "SPY": ParsedSignal(ticker="SPY", signal=SignalType.OVERWEIGHT, date=today - timedelta(days=35), source_path=""),
+    }
+
+    with patch.object(triage_engine.csv_parser, "parse", return_value=mock_portfolio), \
+         patch.object(triage_engine.signal_parser, "parse_all_signals", return_value=mock_signals):
+        plan = triage_engine.run_triage(as_of_date=today)
+
+    item_tickers = {it.ticker for it in plan.items}
+    assert "AAPL" in item_tickers
+    assert "MSFT" in item_tickers
+    # Extraneous reports on disk are ignored
+    assert "HLIT" not in item_tickers
+    assert "SPY" not in item_tickers
+
+
+

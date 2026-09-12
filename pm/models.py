@@ -38,6 +38,7 @@ class ParsedSignal:
     is_expired: bool = False
     raw_rating: str = ""
     in_portfolio: bool = False
+    core_guidance: str = ""
 
 
 @dataclass
@@ -58,6 +59,9 @@ class PortfolioState:
     cash_percent: float
     holdings: Dict[str, Holding]
     as_of_date: Optional[str] = None
+    source_file: Optional[str] = None
+    download_time: Optional[str] = None
+    file_mtime: Optional[float] = None
 
 
 @dataclass
@@ -94,8 +98,12 @@ class ReconciliationSummary:
     clusters: Dict[int, List[str]]
     aging_signals: List[ParsedSignal] = field(default_factory=list)
     expired_signals: List[ParsedSignal] = field(default_factory=list)
+    all_signals: List[ParsedSignal] = field(default_factory=list)
     max_age_days: int = 14
     execution_date: date = field(default_factory=date.today)
+    source_file: Optional[str] = None
+    download_time: Optional[str] = None
+    execution_timestamp: Optional[str] = None
 
 
 @dataclass

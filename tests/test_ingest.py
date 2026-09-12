@@ -29,6 +29,24 @@ def test_broker_csv_parsing():
     assert state.holdings["MSFT"].symbol == "MSFT"
     assert "Pending Activity" not in state.holdings
     assert state.total_account_value == 50000.0 + 4501.20 + 5000.0
+    assert state.source_file == Path(f_path).name
+    assert state.file_mtime is not None
+
+
+def test_broker_csv_download_time_footer():
+    sample_csv = """Account number,Account name,Symbol,Description,Quantity,Last price,Last price change,Current value,Cost basis total
+653586102,BrokerageLink,FDRXX**,HELD IN MONEY MARKET,,,,$10000.00,
+"Date downloaded Sep-11-2026 3:24 p.m ET"
+"""
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".csv") as f:
+        f.write(sample_csv)
+        f_path = f.name
+
+    parser = BrokerCSVParser()
+    state = parser.parse(f_path)
+    assert state.download_time == "Sep-11-2026 3:24 p.m ET"
+    assert state.source_file == Path(f_path).name
+
 
 
 def test_markdown_signal_parsing():

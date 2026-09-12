@@ -420,3 +420,119 @@ def test_candidate_exclusion_filters_blacklisted_symbol(e2e_config, tmp_path):
     allocated_tickers = {a.ticker for a in summary.allocations}
     assert "NVDA" not in allocated_tickers
     assert "AAPL" in allocated_tickers
+
+
+def test_control_universe_ignores_extraneous_reports(e2e_config, tmp_path):
+    """
+    Verifies that extraneous reports in the vault (like HLIT and SPY) that are not
+    in stocks.csv and not held in portfolio holdings are completely ignored in
+    aging_signals, expired_signals, and all_signals.
+    """
+    today = date(2026, 9, 11)
+
+    # Watchlist configured with stocks_file containing only AAPL
+    stocks_file = tmp_path / "stocks.csv"
+    stocks_file.write_text("AAPL\n", encoding="utf-8")
+    e2e_config["watchlist"]["stocks_file"] = str(stocks_file)
+    e2e_config["watchlist"]["categories"] = {}
+
+    reports_dir = Path(e2e_config["paths"]["reports_dir"])
+
+    # Create AAPL report
+    aapl_dir = reports_dir / "AAPL" / f"AAPL_{today.strftime('%Y%m%d')}_100000" / "5_portfolio"
+    aapl_dir.mkdir(parents=True)
+    (aapl_dir / "decision.md").write_text("**Rating**: Overweight\n**Target**: $200.0\n**Summary**: Core hold.")
+
+    # Create extraneous HLIT report (aging: 11 days old)
+    hlit_dir = reports_dir / "HLIT" / f"HLIT_{(today - timedelta(days=11)).strftime('%Y%m%d')}_100000" / "5_portfolio"
+    hlit_dir.mkdir(parents=True)
+    (hlit_dir / "decision.md").write_text("**Rating**: Hold\n**Summary**: Extraneous report.")
+
+    # Create extraneous SPY report (expired: 35 days old)
+    spy_dir = reports_dir / "SPY" / f"SPY_{(today - timedelta(days=35)).strftime('%Y%m%d')}_100000" / "5_portfolio"
+    spy_dir.mkdir(parents=True)
+    (spy_dir / "decision.md").write_text("**Rating**: Overweight\n**Summary**: Extraneous expired report.")
+
+    mock_portfolio = PortfolioState(
+        total_account_value=100000.0,
+        cash_balance=20000.0,
+        cash_percent=20.0,
+        holdings={
+            "AAPL": Holding(symbol="AAPL", description="Apple Inc", quantity=100, last_price=150.0, current_value=15000.0),
+        },
+        source_file="Portfolio_Positions_Sep-11-2026 (1).csv",
+        download_time="Sep-11-2026 3:24 p.m ET",
+    )
+
+    from pm.risk.clustering import CorrelationClusterEngine
+    from pm.risk.constraints import PortfolioConstraintOptimizer
+    from pm.engine.reconciler import PortfolioReconciler
+    from pm.market_data.pricing import MarketDataService
+    from pm.ingest.broker_csv import BrokerCSVParser
+    from pm.ingest.markdown_signals import MarkdownSignalParser
+    import pandas as pd
+
+    engine = PortfolioManagerEngine.__new__(PortfolioManagerEngine)
+    engine.config = e2e_config
+    engine.equivalent_symbols = []
+    engine.reports_dir = str(reports_dir)
+    engine.downloads_dir = str(tmp_path / "downloads")
+    engine.obsidian_vault_dir = str(reports_dir)
+    engine.max_age_days = 14
+    engine.stale_warning_days = 4
+    engine.candidate_min_signal = SignalType.OVERWEIGHT
+    engine.enforce_cash_reserve = True
+    engine.restrict_candidates_to_watchlist = True
+    engine.excluded_tickers = set()
+    engine.watchlist_cfg = e2e_config["watchlist"]
+
+    engine.signal_parser = MarkdownSignalParser(reports_dir, max_age_days=14, stale_warning_days=4)
+    engine.csv_parser = BrokerCSVParser(engine.downloads_dir)
+    engine.market_data = MarketDataService()
+    engine.cluster_engine = CorrelationClusterEngine(cophenetic_threshold=0.5)
+    engine.optimizer = PortfolioConstraintOptimizer(
+        max_position_weight=0.15,
+        min_cash_reserve=0.15,
+        max_cluster_exposure=0.25,
+        multipliers={
+            SignalType.OVERWEIGHT: 1.5,
+            SignalType.EQUAL_WEIGHT: 1.0,
+            SignalType.UNDERWEIGHT: 0.5,
+            SignalType.AVOID: 0.0,
+        },
+        market_cap_cfg=e2e_config["market_cap_weighting"],
+    )
+    engine.reconciler = PortfolioReconciler(
+        relative_threshold=0.20,
+        hold_drift_tolerance=1.00,
+        min_dollar_trade=1500.0,
+        prefer_whole_shares=True,
+        liquidate_avoid=True,
+    )
+
+    mock_prices = {"AAPL": 150.0}
+    mock_caps = {"AAPL": 3_000_000_000_000}
+    mock_returns = pd.DataFrame({"AAPL": [0.01, -0.02, 0.015, -0.01]})
+
+    with patch.object(engine.csv_parser, "parse", return_value=mock_portfolio), \
+         patch.object(engine.market_data, "fetch_realtime_prices", return_value=mock_prices), \
+         patch.object(engine.market_data, "fetch_market_caps", return_value=mock_caps), \
+         patch.object(engine.market_data, "fetch_historical_returns", return_value=mock_returns):
+        summary = engine.run_solver(as_of_date=today)
+
+    aging_tickers = {s.ticker for s in summary.aging_signals}
+    expired_tickers = {s.ticker for s in summary.expired_signals}
+    all_signal_tickers = {s.ticker for s in summary.all_signals}
+
+    # HLIT and SPY must not be present anywhere in signals
+    assert "HLIT" not in aging_tickers
+    assert "SPY" not in expired_tickers
+    assert "HLIT" not in all_signal_tickers
+    assert "SPY" not in all_signal_tickers
+    assert "AAPL" in all_signal_tickers
+
+    # Snapshot metadata is populated
+    assert summary.source_file == "Portfolio_Positions_Sep-11-2026 (1).csv"
+    assert summary.download_time == "Sep-11-2026 3:24 p.m ET"
+    assert summary.execution_timestamp is not None
+

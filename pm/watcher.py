@@ -4,9 +4,10 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 from pm.engine.controller import PortfolioManagerEngine
+from pm.models import ReconciliationSummary
 from pm.output.reporter import MarkdownTradeReporter
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class DownloadWatcher:
             link_style=output_cfg.get("report_link_style", "markdown"),
             prefer_complete_report=output_cfg.get("prefer_complete_report", True),
             date_layout=output_cfg.get("date_layout", "stacked"),
+            append_daily_snapshots=output_cfg.get("append_daily_snapshots", True),
         )
 
         watcher_cfg = self.engine.config.get("watcher", {})
@@ -44,6 +46,23 @@ class DownloadWatcher:
             return None
         csv_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         return csv_files[0]
+
+    def process_file(
+        self,
+        csv_path: Union[str, Path],
+        overwrite: bool = False,
+    ) -> Tuple[ReconciliationSummary, Path]:
+        """
+        Executes the Portfolio Manager solver for a broker CSV file and writes/appends
+        the trade orders markdown report in the configured Obsidian vault.
+
+        Returns:
+            Tuple of (ReconciliationSummary, Path to generated report markdown file)
+        """
+        path_obj = Path(csv_path)
+        summary = self.engine.run_solver(csv_path=str(path_obj))
+        out_path = self.reporter.write_report(summary, overwrite=overwrite)
+        return summary, out_path
 
     def run(self):
         print("=======================================================")
@@ -85,8 +104,7 @@ class DownloadWatcher:
                     self._last_seen_mtime = current_csv.stat().st_mtime
 
                     print("🚀 Executing Portfolio Manager Solver...")
-                    summary = self.engine.run_solver(csv_path=str(current_csv))
-                    out_path = self.reporter.write_report(summary)
+                    summary, out_path = self.process_file(current_csv)
 
                     active_count = len([a for a in summary.allocations if a.action in ("BUY", "SELL") and a.order_shares > 0])
                     print(f"✅ Success! Rebalancing complete ({active_count} actionable trade orders).")

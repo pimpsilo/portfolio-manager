@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--execute", action="store_true", help="Generate Trade_Orders_YYYY-MM-DD.md in Obsidian vault")
     parser.add_argument("--watch", action="store_true", help="Monitor ~/Downloads for new CSV and auto-execute")
     parser.add_argument("--preview", action="store_true", help="Display verification tables without writing", default=True)
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing daily report instead of appending a new snapshot")
 
     # New TradingAgents integration flags
     parser.add_argument("--triage", action="store_true", help="Audit watchlist and holdings reports to display evaluation queue")
@@ -131,15 +132,19 @@ def main():
     print(f"🛡️ Target Cash Reserve  : ${summary.target_cash_reserve:,.2f} ({summary.target_cash_reserve/summary.total_portfolio_value*100:.1f}%)")
     print(f"🏦 Projected Ending Cash: ${summary.projected_ending_cash:,.2f} ({summary.projected_ending_cash/summary.total_portfolio_value*100:.1f}%)\n")
 
-    # 1. Active Directives Table
+    # 1. Active Directives Table (sell orders then buy orders, alphabetically by ticker)
     active_orders = [a for a in summary.allocations if a.action in ("BUY", "SELL") and a.order_shares > 0]
+    sells = sorted([a for a in active_orders if a.action == "SELL"], key=lambda a: a.ticker)
+    buys = sorted([a for a in active_orders if a.action == "BUY"], key=lambda a: a.ticker)
+    ordered_active = sells + buys
+
     print("=======================================================")
-    print(f"🎯 ACTIONABLE TRADE DIRECTIVES ({len(active_orders)} Orders)")
+    print(f"🎯 ACTIONABLE TRADE DIRECTIVES ({len(ordered_active)} Orders)")
     print("=======================================================")
-    if active_orders:
+    if ordered_active:
         headers = ["Ticker", "Shares Held", "Price", "Target %", "Target $", "Delta ($)", "Action", "Order Shares", "Reason"]
         rows = []
-        for a in active_orders:
+        for a in ordered_active:
             rows.append([
                 a.ticker,
                 f"{a.current_shares:g}",
@@ -169,6 +174,19 @@ def main():
             a_rows.append([s.ticker, s.date.isoformat(), f"{s.age_days}d", f"{s.days_remaining}d", s.signal.value, in_port, status])
         print(format_table(a_headers, a_rows))
 
+    # 3. Non-Portfolio Securities with Agent Reports
+    non_port_signals = [s for s in summary.all_signals if not s.in_portfolio]
+    if non_port_signals:
+        print("\n=======================================================")
+        print(f"🌐 NON-PORTFOLIO SECURITIES WITH AGENT REPORTS ({len(non_port_signals)} Tickers)")
+        print("=======================================================")
+        np_headers = ["Ticker", "Rating", "Target", "Report Date", "Age", "Days Left"]
+        np_rows = []
+        for s in sorted(non_port_signals, key=lambda x: x.ticker):
+            tp_str = f"${s.target_price:,.2f}" if s.target_price is not None else "—"
+            np_rows.append([s.ticker, s.signal.value, tp_str, s.date.isoformat(), f"{s.age_days}d", f"{s.days_remaining}d"])
+        print(format_table(np_headers, np_rows))
+
     # 3. Correlated Clusters Summary
     print("\n=======================================================")
     print("🔗 CORRELATED ASSET CLUSTERS (Max 25% Exposure Cap)")
@@ -193,9 +211,10 @@ def main():
         link_style=output_cfg.get("report_link_style", "markdown"),
         prefer_complete_report=output_cfg.get("prefer_complete_report", True),
         date_layout=output_cfg.get("date_layout", "stacked"),
+        append_daily_snapshots=output_cfg.get("append_daily_snapshots", True),
     )
     if args.execute:
-        saved_path = reporter.write_report(summary)
+        saved_path = reporter.write_report(summary, overwrite=args.overwrite)
         print(f"\n✅ Trade orders markdown successfully written to:")
         print(f"   {saved_path}\n")
     else:

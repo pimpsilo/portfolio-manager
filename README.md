@@ -23,6 +23,11 @@ A deterministic feedback controller closing the control loop between asset-level
 4. **Obsidian Vault Reporting**:
    - Outputs markdown reports directly to your Obsidian vault as `Trade_Orders_YYYY-MM-DD.md`.
 
+## 📋 Cheat Sheet & Workflows
+
+For a quick copy-pasteable reference of all commands to update analyst research reports, audit signal freshness, and generate trade execution orders, see:
+👉 **[Report Update Cheat Sheet](docs/REPORT_UPDATE_CHEAT_SHEET.md)**
+
 ---
 
 ## 🛠️ Usage
