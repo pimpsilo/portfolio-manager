@@ -3,7 +3,7 @@ from datetime import date
 from pathlib import Path
 import pytest
 
-from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType
+from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType, UnreportedSecurity
 from pm.output.reporter import MarkdownTradeReporter
 
 
@@ -398,12 +398,87 @@ def test_five_sections_in_trade_order_report(sample_vault):
     assert "CAVA" in md
     assert "BBB" in md
 
-    # Section 5 checks:
-    assert "## 📋 5. All Securities with Agent Reports" in md
+    # Section 5 checks (Securities without Active Agent Reports):
+    assert "## ⚠️ 5. Securities without Active Agent Reports" in md
+    assert "*All portfolio holdings and watchlist securities have active agent research reports on file. Zero missing or expired reports.*" in md
+
+    # Section 6 checks (All Securities with Agent Reports):
+    assert "## 📋 6. All Securities with Agent Reports" in md
     assert "Maintain current exposure in CAVA without deploying new capital." in md
     assert "Trim AAA to reduce defensive exposure." in md
     assert "$78.00" in md
     assert "$180.00" in md
+
+
+def test_securities_without_active_agent_reports_section(sample_vault):
+    vault_dir = sample_vault["vault_dir"]
+    reporter = MarkdownTradeReporter(output_dir=str(vault_dir))
+
+    summary = ReconciliationSummary(
+        total_portfolio_value=100000.0,
+        current_cash=20000.0,
+        target_cash_reserve=15000.0,
+        projected_ending_cash=20000.0,
+        total_buys_dollars=0.0,
+        total_sells_dollars=0.0,
+        allocations=[],
+        clusters={},
+        aging_signals=[],
+        expired_signals=[],
+        all_signals=[],
+        unreported_securities=[
+            UnreportedSecurity(
+                ticker="FICO",
+                in_portfolio=False,
+                status="MISSING",
+                shares_held=0.0,
+                current_weight=0.0,
+                last_price=0.0,
+                reason="No research report on file in vault",
+            ),
+            UnreportedSecurity(
+                ticker="MPWR",
+                in_portfolio=True,
+                status="MISSING",
+                shares_held=10.0,
+                current_weight=5.5,
+                last_price=550.0,
+                reason="No research report on file in vault",
+            ),
+            UnreportedSecurity(
+                ticker="TROW",
+                in_portfolio=False,
+                status="EXPIRED",
+                shares_held=0.0,
+                current_weight=0.0,
+                last_price=110.0,
+                last_report_date=date(2026, 8, 15),
+                last_report_path=sample_vault["mu_source"],
+                reason="Report expired (28d old > 14d)",
+            ),
+        ],
+        max_age_days=14,
+        execution_date=date(2026, 9, 12),
+        source_file="Portfolio_Positions_Sep-12-2026.csv",
+        download_time="Sep-12-2026 9:43 a.m ET",
+    )
+
+    md = reporter.generate_report_markdown(summary)
+
+    assert "## ⚠️ 5. Securities without Active Agent Reports" in md
+    assert "FICO" in md
+    assert "No (0 shs · Watchlist)" in md
+    assert "🛑 **Missing** (No report)" in md
+    assert "`python main.py --run-agents --tickers FICO`" in md
+
+    assert "MPWR" in md
+    assert "**Held** (10 shs · 5.50%)" in md
+    assert "$550.00" in md
+
+    assert "TROW" in md
+    assert "🛑 **Expired** (>14d)" in md
+    assert "2026-08-15" in md
+    assert "`python main.py --run-agents --tickers TROW`" in md
 
 
 def test_daily_snapshot_append_and_idempotency(sample_vault):

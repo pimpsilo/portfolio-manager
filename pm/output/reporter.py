@@ -4,7 +4,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Optional, Union
 from urllib.parse import quote
-from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType
+from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType, UnreportedSecurity
 
 _RUN_DIR_RE = re.compile(r"^[A-Z0-9._-]+_\d{8}_\d{6}$")
 _RUN_DIR_DATE_RE = re.compile(r"_(\d{4})(\d{2})(\d{2})_\d{6}")
@@ -70,9 +70,14 @@ class MarkdownTradeReporter:
 
         # Compute relative path to vault output directory
         try:
-            rel = os.path.relpath(target, start=str(self.output_dir)).replace(os.sep, "/")
-        except ValueError:
-            rel = str(target).replace(os.sep, "/")
+            out_start = str(self.output_dir.resolve())
+            target_path = str(target.resolve()) if hasattr(target, "resolve") else str(Path(target).resolve())
+            rel = os.path.relpath(target_path, start=out_start).replace(os.sep, "/")
+        except (ValueError, FileNotFoundError, OSError):
+            try:
+                rel = os.path.relpath(target, start=str(self.output_dir)).replace(os.sep, "/")
+            except ValueError:
+                rel = str(target).replace(os.sep, "/")
 
         # Format link base
         if self.link_style == "wikilink":
@@ -277,8 +282,48 @@ class MarkdownTradeReporter:
                 )
             lines.append("")
 
-        # 5. All Securities with Agent Reports (Alphabetical by Ticker)
-        lines.append("## 📋 5. All Securities with Agent Reports")
+        # 5. Securities without Active Agent Reports
+        lines.append("## ⚠️ 5. Securities without Active Agent Reports")
+        lines.append("")
+        lines.append("> Tracked securities of interest (portfolio holdings and `stocks.csv` watchlist) that currently lack an active `tradingagents` research report. Run `python main.py --run-agents --tickers <TICKER>` to generate coverage.")
+        lines.append("")
+
+        unreported_list = getattr(summary, "unreported_securities", [])
+        if not unreported_list:
+            lines.append("*All portfolio holdings and watchlist securities have active agent research reports on file. Zero missing or expired reports.*")
+            lines.append("")
+        else:
+            lines.append("| Ticker | Portfolio Participation | Current Price | Report Status | Last Report Date | Recommended Action |")
+            lines.append("| :--- | :--- | :---: | :---: | :---: | :--- |")
+
+            for u in unreported_list:
+                if u.in_portfolio and u.shares_held > 0:
+                    participation = f"**Held** ({u.shares_held:g} shs · {u.current_weight:.2f}%)"
+                elif u.in_portfolio:
+                    participation = "**Held** (0 shs)"
+                else:
+                    participation = "No (0 shs · Watchlist)"
+
+                price_str = f"${u.last_price:,.2f}" if u.last_price > 0 else "—"
+
+                if u.status == "MISSING":
+                    status_badge = "🛑 **Missing** (No report)"
+                    date_str = "—"
+                    action_str = f"Queue evaluation: `python main.py --run-agents --tickers {u.ticker}`"
+                    ticker_cell = f"**{u.ticker}**"
+                else:  # EXPIRED
+                    status_badge = "🛑 **Expired** (>14d)"
+                    date_str = u.last_report_date.isoformat() if u.last_report_date else "—"
+                    action_str = f"Re-evaluate urgently: `python main.py --run-agents --tickers {u.ticker}`"
+                    ticker_cell = self._report_md_link(u.ticker, u.last_report_path, u.last_report_date, bold=True, include_date=False)
+
+                lines.append(
+                    f"| {ticker_cell} | {participation} | {price_str} | {status_badge} | {date_str} | {action_str} |"
+                )
+            lines.append("")
+
+        # 6. All Securities with Agent Reports (Alphabetical by Ticker)
+        lines.append("## 📋 6. All Securities with Agent Reports")
         lines.append("")
         lines.append("> Complete directory of all securities with agent research reports on file, including analyst verdicts, price targets, core guidance summaries, and current portfolio participation.")
         lines.append("")

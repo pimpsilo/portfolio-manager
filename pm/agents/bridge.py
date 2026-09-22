@@ -47,7 +47,7 @@ class TradingAgentsBridge:
                 self.config = yaml.safe_load(f)
 
         paths = self.config.get("paths", {})
-        self.reports_dir = Path(paths.get("reports_dir", "/Users/matthewhope/reports"))
+        self.reports_dir = Path(paths.get("reports_dir", "/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/01_agent_reports"))
         self.debug = debug
 
         self.tradingagents_cfg = self.config.get("tradingagents", {})
@@ -77,6 +77,25 @@ class TradingAgentsBridge:
 
         return base_config
 
+    @staticmethod
+    def get_latest_settled_trade_date(reference_symbol: str = "SPY") -> str:
+        """
+        Determines the latest trading date that has fully settled closing prices.
+        If today's market data is unsettled (e.g. after-hours with NaN close in Yahoo Finance),
+        returns the preceding settled trading day.
+        """
+        try:
+            import yfinance as yf
+            df = yf.download(reference_symbol, period="5d", progress=False, auto_adjust=True)
+            if not df.empty and "Close" in df.columns:
+                closes = df["Close"].dropna()
+                if not closes.empty:
+                    settled = closes.index[-1].strftime("%Y-%m-%d")
+                    return settled
+        except Exception as e:
+            logger.debug(f"Could not verify settled trade date via {reference_symbol}: {e}")
+        return datetime.now().strftime("%Y-%m-%d")
+
     def evaluate_ticker(
         self,
         ticker: str,
@@ -90,13 +109,13 @@ class TradingAgentsBridge:
         """
         start_time = time.time()
         if trade_date is None:
-            trade_date = datetime.now().strftime("%Y-%m-%d")
+            trade_date = self.get_latest_settled_trade_date()
 
         if analysts is None:
             analysts = ["market", "news", "fundamentals"]
 
         ticker_clean = ticker.strip().upper()
-        logger.info(f"🚀 Starting TradingAgents research for {ticker_clean} (asset_type={asset_type}, analysts={analysts})...")
+        logger.info(f"🚀 Starting TradingAgents research for {ticker_clean} (trade_date={trade_date}, asset_type={asset_type}, analysts={analysts})...")
 
         try:
             from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -147,6 +166,7 @@ class TradingAgentsBridge:
         self,
         queue: List[TriageItem],
         limit: Optional[int] = None,
+        trade_date: Optional[str] = None,
     ) -> List[AgentEvaluationResult]:
         """
         Executes evaluations for a list of triaged candidate items with rate limiting
@@ -160,14 +180,18 @@ class TradingAgentsBridge:
             logger.info("Evaluation queue is empty. No tickers to evaluate.")
             return results
 
+        if trade_date is None:
+            trade_date = self.get_latest_settled_trade_date()
+
         print(f"\n=======================================================")
-        print(f"🤖 TRADINGAGENTS PIPELINE DISPATCH ({total} Tickers)")
+        print(f"🤖 TRADINGAGENTS PIPELINE DISPATCH ({total} Tickers, Date: {trade_date})")
         print(f"=======================================================")
 
         for idx, item in enumerate(targets, 1):
             print(f"[{idx}/{total}] Evaluating {item.ticker} ({item.category}, {item.asset_type})...")
             res = self.evaluate_ticker(
                 ticker=item.ticker,
+                trade_date=trade_date,
                 asset_type=item.asset_type,
                 analysts=item.analysts,
             )

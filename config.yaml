@@ -1,14 +1,14 @@
 paths:
-  reports_dir: "/Users/matthewhope/github_projects/portfolio-manager/portfolio/01_agent_reports"
+  reports_dir: "/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/01_agent_reports"
   downloads_dir: "/Users/matthewhope/Downloads"
-  obsidian_vault_dir: "/Users/matthewhope/github_projects/portfolio-manager/portfolio/00_trade_orders"
+  obsidian_vault_dir: "/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/00_trade_orders"
 
 signals:
   max_age_days: 14               # Reports older than 14 days are expired
   stale_warning_days: 4          # Alert if report expires in <= 4 days (i.e. age >= 10 days)
   candidate_min_signal: "OVERWEIGHT"
   restrict_candidates_to_watchlist: true # Enforce that only tickers in stocks.csv or holdings enter investable universe
-  excluded_tickers: []           # Explicit blacklist of tickers that will never enter the universe or receive capital
+  excluded_tickers: ["GEV"]      # Explicit blacklist of tickers that will never enter the universe or receive capital
 
 # Equivalent share classes (e.g. Alphabet Class C and Class A)
 # If one is already held in the portfolio, the other is merged to prevent double allocation.
@@ -77,8 +77,8 @@ watchlist:
 # ==============================================================================
 tradingagents:
   llm_provider: "google"             # Google Gemini
-  quick_think_llm: "gemini-3.1-flash-lite"
-  deep_think_llm: "gemini-3.5-flash"
+  quick_think_llm: "gemini-3.5-flash-lite"
+  deep_think_llm: "gemini-3.8-flash"
   google_thinking_level: "high"
   max_debate_rounds: 5               # "Deep" research depth (5 debate rounds)
   max_risk_discuss_rounds: 5         # "Deep" research depth (5 risk rounds)

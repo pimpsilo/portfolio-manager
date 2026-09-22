@@ -87,6 +87,19 @@ class AllocationResult:
 
 
 @dataclass
+class UnreportedSecurity:
+    ticker: str
+    in_portfolio: bool
+    status: str  # "MISSING" or "EXPIRED"
+    shares_held: float = 0.0
+    current_weight: float = 0.0
+    last_price: float = 0.0
+    last_report_date: Optional[date] = None
+    last_report_path: Optional[str] = None
+    reason: str = ""
+
+
+@dataclass
 class ReconciliationSummary:
     total_portfolio_value: float
     current_cash: float
@@ -99,6 +112,7 @@ class ReconciliationSummary:
     aging_signals: List[ParsedSignal] = field(default_factory=list)
     expired_signals: List[ParsedSignal] = field(default_factory=list)
     all_signals: List[ParsedSignal] = field(default_factory=list)
+    unreported_securities: List[UnreportedSecurity] = field(default_factory=list)
     max_age_days: int = 14
     execution_date: date = field(default_factory=date.today)
     source_file: Optional[str] = None

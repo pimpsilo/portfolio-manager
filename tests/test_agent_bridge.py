@@ -140,9 +140,28 @@ def test_run_batch(bridge_config):
     mock_res_nvda = AgentEvaluationResult(ticker="NVDA", signal="Buy", report_path="/path/nvda", success=True)
 
     with patch.object(bridge, "evaluate_ticker", side_effect=[mock_res_aapl, mock_res_nvda]) as mock_eval:
-        results = bridge.run_batch(items, limit=2)
+        results = bridge.run_batch(items, limit=2, trade_date="2026-09-16")
 
     assert len(results) == 2
     assert results[0].ticker == "AAPL"
     assert results[1].ticker == "NVDA"
     assert mock_eval.call_count == 2
+    mock_eval.assert_any_call(
+        ticker="AAPL",
+        trade_date="2026-09-16",
+        asset_type="stock",
+        analysts=["market"],
+    )
+
+
+def test_get_latest_settled_trade_date():
+    import pandas as pd
+    # Mock yf.download returning settled data
+    mock_df = pd.DataFrame(
+        {"Close": [100.0, 101.0, None]},
+        index=pd.to_datetime(["2026-09-14", "2026-09-15", "2026-09-16"]),
+    )
+    with patch("yfinance.download", return_value=mock_df):
+        settled = TradingAgentsBridge.get_latest_settled_trade_date()
+        assert settled == "2026-09-15"
+

@@ -265,7 +265,8 @@ def test_output_paths_single_run_structural_parity(parity_env):
         assert "## ⏳ 2. Aging / Stale Reports Summary" in c
         assert "## 📊 3. Full Portfolio Rebalance & Drift Ledger" in c
         assert "## 🌐 4. Non-Portfolio Securities with Active Agent Reports & Status" in c
-        assert "## 📋 5. All Securities with Agent Reports" in c
+        assert "## ⚠️ 5. Securities without Active Agent Reports" in c
+        assert "## 📋 6. All Securities with Agent Reports" in c
         assert "## 🔗 Correlated Asset Clusters & Exposure" in c
         assert "HLIT" not in c
         assert "SPY" not in c
@@ -440,7 +441,8 @@ def test_output_paths_legacy_format_auto_upgrade(parity_env):
     c_upgraded = report_path.read_text(encoding="utf-8")
     assert "## ⏱️ Snapshot:" in c_upgraded
     assert "## 🎯 1. Immediate / Daily Actions" in c_upgraded
-    assert "## 📋 5. All Securities with Agent Reports" in c_upgraded
+    assert "## ⚠️ 5. Securities without Active Agent Reports" in c_upgraded
+    assert "## 📋 6. All Securities with Agent Reports" in c_upgraded
     assert "HLIT" not in c_upgraded, "Legacy content must be cleanly replaced, not appended below"
 
 

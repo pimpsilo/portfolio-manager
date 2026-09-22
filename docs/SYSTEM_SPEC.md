@@ -15,7 +15,7 @@ Develop and maintain a deterministic **Portfolio Manager (PM) Engine** to close 
 ## 3. Data Ingestion & Cleaning Requirements
 
 ### A. Markdown Signal Parsing (`pm/ingest/markdown_signals.py`)
-* **Source:** `/Users/matthewhope/reports/` (recursively scan subdirectories for `*.md`, specifically `5_portfolio/decision.md`, `complete_report.md`, and `00_Portfolio_Actions_Dashboard.md`).
+* **Source:** `/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/01_agent_reports/` (recursively scan subdirectories for `*.md`, specifically `5_portfolio/decision.md`, `complete_report.md`, and `00_Portfolio_Actions_Dashboard.md`).
 * **Extraction:**
   - `Ticker`: Extracted from folder regex `^([A-Z0-9]+)_(\d{8})_(\d{6})$` or file text.
   - `Signal`: Normalized to `OVERWEIGHT` (1.5x), `EQUAL_WEIGHT` (1.0x), `UNDERWEIGHT` (0.5x), `AVOID` (0.0x).

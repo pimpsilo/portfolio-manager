@@ -9,7 +9,7 @@ import yaml
 from pm.ingest.broker_csv import BrokerCSVParser
 from pm.ingest.markdown_signals import MarkdownSignalParser
 from pm.market_data.pricing import MarketDataService
-from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType
+from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType, UnreportedSecurity
 from pm.risk.clustering import CorrelationClusterEngine
 from pm.risk.constraints import PortfolioConstraintOptimizer
 from pm.engine.reconciler import PortfolioReconciler
@@ -37,9 +37,9 @@ class PortfolioManagerEngine:
             [["GOOG", "GOOGL"], ["FOX", "FOXA"], ["BRK.A", "BRK.B"]],
         )
 
-        self.reports_dir = paths.get("reports_dir", "/Users/matthewhope/reports")
+        self.reports_dir = paths.get("reports_dir", "/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/01_agent_reports")
         self.downloads_dir = paths.get("downloads_dir", "/Users/matthewhope/Downloads")
-        self.obsidian_vault_dir = paths.get("obsidian_vault_dir", "/Users/matthewhope/reports")
+        self.obsidian_vault_dir = paths.get("obsidian_vault_dir", "/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/00_trade_orders")
 
         self.max_age_days = signals_cfg.get("max_age_days", 14)
         self.stale_warning_days = signals_cfg.get("stale_warning_days", 4)
@@ -174,15 +174,21 @@ class PortfolioManagerEngine:
         restrict_watchlist = getattr(self, "restrict_candidates_to_watchlist", signals_cfg.get("restrict_candidates_to_watchlist", True))
         excluded_tickers = getattr(self, "excluded_tickers", set(signals_cfg.get("excluded_tickers", [])))
 
-        # Control universe: stocks.csv + held positions. Extraneous reports on disk (e.g. HLIT, SPY) are ignored.
+        # Control universe: stocks.csv + held positions. Extraneous reports on disk (e.g. HLIT, SPY) and excluded tickers are ignored.
         if restrict_watchlist and allowed_candidates:
             control_universe = set(portfolio_state.holdings.keys()) | allowed_candidates
-            control_signals = {
-                t: s for t, s in parsed_signals.items()
-                if (t in control_universe or alias_map.get(t, t) in control_universe)
-            }
         else:
-            control_signals = parsed_signals
+            control_universe = set(portfolio_state.holdings.keys()) | (allowed_candidates if allowed_candidates else set())
+
+        control_universe = {
+            t for t in control_universe
+            if t not in excluded_tickers and alias_map.get(t, t) not in excluded_tickers
+        }
+
+        control_signals = {
+            t: s for t, s in parsed_signals.items()
+            if (t in control_universe or alias_map.get(t, t) in control_universe)
+        }
 
         # Mark in_portfolio flag on signals
         for ticker, sig in control_signals.items():
@@ -313,6 +319,55 @@ class PortfolioManagerEngine:
             key=lambda s: s.ticker,
         )
 
+        # Identify securities of interest without active agent reports (Missing or Expired)
+        # stocks of interest = control_universe (held positions + stocks.csv)
+        unreported_securities: List[UnreportedSecurity] = []
+        seen_canonical: Set[str] = set()
+
+        for ticker in sorted(control_universe):
+            canonical = alias_map.get(ticker, ticker)
+            if canonical in seen_canonical:
+                continue
+            seen_canonical.add(canonical)
+
+            sig = control_signals.get(canonical) or control_signals.get(ticker)
+            is_held = canonical in portfolio_state.holdings or ticker in portfolio_state.holdings
+            holding = portfolio_state.holdings.get(canonical) or portfolio_state.holdings.get(ticker)
+            shares = holding.quantity if holding else 0.0
+            price = realtime_prices.get(canonical, realtime_prices.get(ticker, holding.last_price if holding else 0.0))
+            weight = (shares * price / total_live_portfolio_value * 100.0) if total_live_portfolio_value > 0 and holding else 0.0
+
+            if sig is None:
+                unreported_securities.append(
+                    UnreportedSecurity(
+                        ticker=canonical,
+                        in_portfolio=is_held,
+                        status="MISSING",
+                        shares_held=shares,
+                        current_weight=weight,
+                        last_price=price,
+                        last_report_date=None,
+                        last_report_path=None,
+                        reason="No research report on file in vault",
+                    )
+                )
+            elif sig.is_expired:
+                unreported_securities.append(
+                    UnreportedSecurity(
+                        ticker=canonical,
+                        in_portfolio=is_held,
+                        status="EXPIRED",
+                        shares_held=shares,
+                        current_weight=weight,
+                        last_price=price,
+                        last_report_date=sig.date,
+                        last_report_path=sig.source_path,
+                        reason=f"Report expired ({sig.age_days}d old > {self.max_age_days}d)",
+                    )
+                )
+
+        unreported_securities.sort(key=lambda x: (not x.in_portfolio, x.ticker))
+
         return ReconciliationSummary(
             total_portfolio_value=total_live_portfolio_value,
             current_cash=portfolio_state.cash_balance,
@@ -325,6 +380,7 @@ class PortfolioManagerEngine:
             aging_signals=aging_signals,
             expired_signals=expired_signals,
             all_signals=all_signals,
+            unreported_securities=unreported_securities,
             max_age_days=self.max_age_days,
             execution_date=as_of_date,
             source_file=portfolio_state.source_file,

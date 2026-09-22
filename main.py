@@ -55,6 +55,8 @@ def main():
     parser.add_argument("--older-than", "--days", type=int, default=None, help="Re-evaluate reports older than N days (e.g. --older-than 3). Missing always included.")
     parser.add_argument("--all", "--refresh-all", "--force", action="store_true", help="Re-evaluate ALL reports regardless of age (shortcut for --older-than 0)")
     parser.add_argument("--category", type=str, default=None, help="Filter queue to a specific category (e.g. stocks_watchlist, etfs_index, fixed_income)")
+    parser.add_argument("--queue", "--stale", "--queue-only", "--stale-only", action="store_true", help="Display only the queue of reports in need of refresh (omit fresh reports)")
+    parser.add_argument("--trade-date", type=str, default=None, help="Target evaluation trade date (YYYY-MM-DD); defaults to latest settled trading day")
 
     args = parser.parse_args()
 
@@ -71,6 +73,9 @@ def main():
 
     effective_min_age = 0 if args.all else args.older_than
 
+    if args.queue:
+        args.triage = True
+
     # 1. Triage Mode
     if args.triage:
         print("\n=======================================================")
@@ -83,7 +88,7 @@ def main():
             min_age_days=effective_min_age,
             category=args.category,
         )
-        print(SignalTriageEngine.format_triage_table(plan))
+        print(SignalTriageEngine.format_triage_table(plan, show_fresh=not args.queue))
         print()
         return
 
@@ -113,7 +118,7 @@ def main():
 
         if queue_to_run:
             bridge = TradingAgentsBridge(config_or_path=args.config)
-            bridge.run_batch(queue_to_run, limit=batch_limit)
+            bridge.run_batch(queue_to_run, limit=batch_limit, trade_date=args.trade_date)
         else:
             print("✅ All tracked securities have fresh research reports on file. No agent evaluation needed.")
 
@@ -187,7 +192,23 @@ def main():
             np_rows.append([s.ticker, s.signal.value, tp_str, s.date.isoformat(), f"{s.age_days}d", f"{s.days_remaining}d"])
         print(format_table(np_headers, np_rows))
 
-    # 3. Correlated Clusters Summary
+    # 4. Securities without Active Agent Reports
+    if summary.unreported_securities:
+        print("\n=======================================================")
+        print(f"⚠️ SECURITIES WITHOUT ACTIVE AGENT REPORTS ({len(summary.unreported_securities)} Tickers)")
+        print("=======================================================")
+        un_headers = ["Ticker", "In Portfolio?", "Shares Held", "Price", "Report Status", "Last Report Date", "Recommended Action"]
+        un_rows = []
+        for u in summary.unreported_securities:
+            in_port = "YES" if u.in_portfolio else "No"
+            shs_str = f"{u.shares_held:g}" if u.in_portfolio else "—"
+            pr_str = f"${u.last_price:,.2f}" if u.last_price > 0 else "—"
+            dt_str = u.last_report_date.isoformat() if u.last_report_date else "—"
+            action_str = f"Run: python main.py --run-agents --tickers {u.ticker}"
+            un_rows.append([u.ticker, in_port, shs_str, pr_str, u.status, dt_str, action_str])
+        print(format_table(un_headers, un_rows))
+
+    # 5. Correlated Clusters Summary
     print("\n=======================================================")
     print("🔗 CORRELATED ASSET CLUSTERS (Max 25% Exposure Cap)")
     print("=======================================================")

@@ -36,7 +36,7 @@ class SignalTriageEngine:
             [["GOOG", "GOOGL"], ["FOX", "FOXA"], ["BRK.A", "BRK.B"]],
         )
 
-        self.reports_dir = paths.get("reports_dir", "/Users/matthewhope/reports")
+        self.reports_dir = paths.get("reports_dir", "/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/01_agent_reports")
         self.downloads_dir = paths.get("downloads_dir", "/Users/matthewhope/Downloads")
 
         self.max_age_days = signals_cfg.get("max_age_days", 14)
@@ -231,7 +231,7 @@ class SignalTriageEngine:
         return TriagePlan(items=triage_items, execution_date=as_of_date)
 
     @staticmethod
-    def format_triage_table(plan: TriagePlan) -> str:
+    def format_triage_table(plan: TriagePlan, show_fresh: bool = True) -> str:
         """Formats the triage plan as human-readable CLI tables."""
         output_lines = []
 
@@ -283,8 +283,13 @@ class SignalTriageEngine:
                 for row in rows
             ]
             output_lines.append("\n".join([header_line, sep_line] + row_lines))
+        elif not show_fresh:
+            output_lines.append("\n=======================================================")
+            output_lines.append("✅ All tracked securities have fresh research reports on file.")
+            output_lines.append("   No reports in need of refresh.")
+            output_lines.append("=======================================================")
 
-        if plan.fresh_items:
+        if show_fresh and plan.fresh_items:
             output_lines.append("\n=======================================================")
             output_lines.append(f"✅ FRESH REPORTS ON FILE ({len(plan.fresh_items)} Tickers)")
             output_lines.append("=======================================================")

@@ -9,6 +9,7 @@ A concise reference guide of terminal commands and workflows for updating **Trad
 | Task | Command | Description |
 | :--- | :--- | :--- |
 | **Audit Status (Dry-Run)** | `python main.py --triage` | Audits vault vs. holdings; displays aging/missing reports (zero LLM cost) |
+| **Show Only Stale / Queue** | `python main.py --stale` | Displays only the queue of reports in need of refresh (hides fresh reports) |
 | **Update Stale Reports** | `python main.py --run-agents --older-than 3 --limit 5` | Evaluates up to 5 tickers whose reports are older than 3 days |
 | **Update Specific Tickers** | `python main.py --run-agents --tickers AAPL,NVDA` | Forces fresh research reports for specified comma-separated symbols |
 | **Full Sweep Refresh** | `python main.py --run-agents --all` | Re-evaluates all tracked tickers in the watchlist regardless of age |
@@ -34,6 +35,15 @@ Use the triage engine to inspect which tickers have fresh reports, which are app
 python main.py --triage
 ```
 
+### Show Only Reports in Need of Refresh (Hide Fresh Reports)
+```bash
+python main.py --stale
+# or
+python main.py --queue
+# or
+python main.py --triage --queue-only
+```
+
 ### Audit with Age Threshold
 Filter to see which reports are older than $N$ days:
 ```bash
@@ -51,7 +61,7 @@ python main.py --triage --category stocks_watchlist
 
 ## 2. Refreshing Analyst Research Reports (`TradingAgents`)
 
-The multi-agent evaluation engine coordinates 5 analysts (Market, Fundamentals, News, Sentiment, Risk) to produce structured markdown research reports in `portfolio/01_agent_reports/<TICKER>/`.
+The multi-agent evaluation engine coordinates 5 analysts (Market, Fundamentals, News, Sentiment, Risk) to produce structured markdown research reports in `01_agent_reports/<TICKER>/` within the Portfolio vault (`/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/01_agent_reports/`).
 
 ### A. Incremental Age-Based Refresh (Recommended Daily Workflow)
 Refreshes reports older than 3 days, capped to a batch size of 5:
@@ -121,13 +131,14 @@ When multiple extracts/downloads occur on the same date (e.g. `Portfolio_Positio
   ```
 
 ### The Generated Report Sections
-When written, `Trade_Orders_YYYY-MM-DD.md` contains 5 comprehensive sections:
+When written, `Trade_Orders_YYYY-MM-DD.md` contains 6 comprehensive sections:
 1. **🎯 1. Immediate / Daily Actions**: Actionable rebalance orders with **Sell orders first (alphabetical by ticker)** followed by **Buy orders (alphabetical by ticker)**.
 2. **⏳ 2. Aging / Stale Reports Summary**: Status table of all reports approaching stale or expired (>14 days). Filtered strictly to the control universe (`stocks.csv` + held positions; extraneous reports on disk are ignored).
 3. **📊 3. Full Portfolio Rebalance & Drift Ledger**: Current shares, live quotes, target weights, dollar deltas, and drift/protection rationales.
 4. **🌐 4. Non-Portfolio Securities with Active Agent Reports & Status**: All unheld watchlist securities with active reports, listing ratings, price targets, days left, and candidate status.
-5. **📋 5. All Securities with Agent Reports**: Complete alphabetical directory (A–Z) of all securities with reports on file, including analyst verdicts, price targets, portfolio participation (`Held` vs `Watchlist`), and one-sentence core guidance summaries.
-6. **🔗 Correlated Asset Clusters & Exposure**: Hierarchical correlation groups capped at max 25% exposure.
+5. **⚠️ 5. Securities without Active Agent Reports**: All securities of interest (portfolio holdings + `stocks.csv` watchlist) that lack a current active research report (missing or expired >14d).
+6. **📋 6. All Securities with Agent Reports**: Complete alphabetical directory (A–Z) of all securities with reports on file, including analyst verdicts, price targets, portfolio participation (`Held` vs `Watchlist`), and one-sentence core guidance summaries.
+7. **🔗 Correlated Asset Clusters & Exposure**: Hierarchical correlation groups capped at max 25% exposure.
 
 
 ---
@@ -182,12 +193,14 @@ tail -f logs/watcher.log
 | Flag / Option | Type | Default | Description |
 | :--- | :---: | :---: | :--- |
 | `--triage` | Flag | `False` | Run dry-run audit of watchlist & holdings vs reports |
+| `--stale`, `--queue` | Flag | `False` | Display only the queue of reports in need of refresh (hides fresh reports) |
 | `--run-agents` | Flag | `False` | Execute TradingAgents evaluation on queued tickers |
 | `--pipeline` | Flag | `False` | Run end-to-end: Triage -> Agents -> Solver -> Trade Orders |
 | `--tickers` | String | `None` | Comma-separated list of symbols (e.g. `AAPL,NVDA,GOOG`) |
 | `--limit` | Integer | `5` | Maximum number of tickers to evaluate in this batch |
 | `--older-than`, `--days` | Integer | `None` | Re-evaluate reports older than $N$ days (missing always included) |
 | `--all`, `--refresh-all` | Flag | `False` | Re-evaluate ALL reports regardless of age (equivalent to `--older-than 0`) |
+| `--trade-date` | String | `None` | Explicit trade date (`YYYY-MM-DD`); defaults to latest settled trading day |
 | `--category` | String | `None` | Filter triage/agents to category (e.g. `stocks_watchlist`) |
 | `--preview` | Flag | `True` | Display rebalance verification tables without writing files |
 | `--execute` | Flag | `False` | Write `Trade_Orders_YYYY-MM-DD.md` to Obsidian vault |

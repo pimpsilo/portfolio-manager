@@ -5,7 +5,7 @@ A deterministic feedback controller closing the control loop between asset-level
 ## 🚀 Key Features
 
 1. **Deterministic Data Ingestion**:
-   - Recursively parses Obsidian signal vaults (`/Users/matthewhope/reports/`), extracting signals, dates, price targets, and stop losses.
+   - Recursively parses Obsidian signal vaults (`/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/01_agent_reports/`), extracting signals, dates, price targets, and stop losses.
    - Parses and cleans Fidelity broker CSV files (`Portfolio_Positions_*.csv`), extracting cash balances (e.g. `FDRXX`) and stripping symbol artifacts.
    - Applies a configurable expiration filter (default: 14 days) and considers non-portfolio candidate assets for inclusion.
 

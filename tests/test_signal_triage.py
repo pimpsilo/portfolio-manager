@@ -420,4 +420,49 @@ def test_triage_ignores_extraneous_reports_not_in_stocks_or_holdings(tmp_path):
     assert "SPY" not in item_tickers
 
 
+def test_format_triage_table_show_fresh():
+    items = [
+        TriageItem(
+            ticker="AAPL",
+            category="stocks_watchlist",
+            asset_type="stock",
+            analysts=["market"],
+            in_portfolio=True,
+            status="FRESH",
+            priority=5,
+            age_days=1,
+            days_remaining=13,
+            current_signal=SignalType.OVERWEIGHT,
+            reason="Fresh report",
+        ),
+        TriageItem(
+            ticker="LULU",
+            category="stocks_watchlist",
+            asset_type="stock",
+            analysts=["market"],
+            in_portfolio=False,
+            status="STALE_SOON",
+            priority=3,
+            age_days=12,
+            days_remaining=2,
+            current_signal=SignalType.UNDERWEIGHT,
+            reason="Stale soon",
+        ),
+    ]
+    plan = TriagePlan(items=items)
+
+    full_output = SignalTriageEngine.format_triage_table(plan, show_fresh=True)
+    assert "ACTIONABLE RESEARCH QUEUE" in full_output
+    assert "LULU" in full_output
+    assert "FRESH REPORTS ON FILE" in full_output
+    assert "AAPL" in full_output
+
+    stale_only_output = SignalTriageEngine.format_triage_table(plan, show_fresh=False)
+    assert "ACTIONABLE RESEARCH QUEUE" in stale_only_output
+    assert "LULU" in stale_only_output
+    assert "FRESH REPORTS ON FILE" not in stale_only_output
+    assert "AAPL" not in stale_only_output
+
+
+
 
