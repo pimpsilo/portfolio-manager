@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Set
 import yaml
 
 from pm.ingest.broker_csv import BrokerCSVParser
+from pm.config import validate_config
 from pm.ingest.markdown_signals import MarkdownSignalParser
 from pm.market_data.pricing import MarketDataService
 from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType, UnreportedSecurity
@@ -25,6 +26,8 @@ class PortfolioManagerEngine:
     def __init__(self, config_path: str = "config.yaml"):
         with open(config_path, "r", encoding="utf-8") as f:
             self.config = yaml.safe_load(f)
+        for warning in validate_config(self.config, config_path):
+            logger.warning(warning)
 
         paths = self.config.get("paths", {})
         signals_cfg = self.config.get("signals", {})
@@ -44,6 +47,11 @@ class PortfolioManagerEngine:
         self.max_age_days = signals_cfg.get("max_age_days", 14)
         self.stale_warning_days = signals_cfg.get("stale_warning_days", 4)
         self.candidate_min_signal = SignalType.from_str(signals_cfg.get("candidate_min_signal", "OVERWEIGHT"))
+        self.expired_holding_policy = signals_cfg.get("expired_holding_policy", "neutral")
+        self.long_expired_days = int(signals_cfg.get("long_expired_days", 30))
+        self.long_expired_policy = signals_cfg.get("long_expired_policy", "trim")
+        self.expired_weight_cap = float(signals_cfg.get("expired_weight_cap", 0.10))
+        self.missing_report_buy_policy = signals_cfg.get("missing_report_buy_policy", "block")
 
         # Multipliers
         multipliers = {
@@ -227,11 +235,24 @@ class PortfolioManagerEngine:
 
         # Map signals for all universe assets
         active_signals: Dict[str, SignalType] = {}
+        expired_cap_tickers: Set[str] = set()
         for t in sorted_universe:
             if t in parsed_signals:
                 sig_obj = parsed_signals[t]
                 if sig_obj.is_expired:
-                    active_signals[t] = SignalType.EQUAL_WEIGHT
+                    expired_holding_policy = getattr(self, "expired_holding_policy", "neutral")
+                    long_expired_days = getattr(self, "long_expired_days", 30)
+                    long_expired_policy = getattr(self, "long_expired_policy", "trim")
+                    policy = expired_holding_policy
+                    if sig_obj.age_days >= long_expired_days:
+                        policy = long_expired_policy
+                    active_signals[t] = (
+                        SignalType.UNDERWEIGHT
+                        if policy == "trim"
+                        else SignalType.EQUAL_WEIGHT
+                    )
+                    if policy == "cap":
+                        expired_cap_tickers.add(t)
                 else:
                     active_signals[t] = sig_obj.signal
             else:
@@ -240,7 +261,37 @@ class PortfolioManagerEngine:
         # 3. Step 1: Real-Time Pricing & Market Caps (yfinance)
         fallback_prices = {s: h.last_price for s, h in portfolio_state.holdings.items()}
         realtime_prices = self.market_data.fetch_realtime_prices(sorted_universe, fallback_prices=fallback_prices)
+        price_sources = {
+            ticker: getattr(self.market_data, "price_sources", {}).get(
+                ticker, "LIVE" if realtime_prices.get(ticker, 0.0) > 0 else "MISSING"
+            )
+            for ticker in sorted_universe
+        }
+        data_quality_warnings = [
+            f"{ticker} is priced from the broker CSV export."
+            for ticker, source in price_sources.items()
+            if source == "CSV_FALLBACK"
+        ]
+        missing_held_prices = [
+            ticker for ticker in portfolio_state.holdings
+            if realtime_prices.get(ticker, 0.0) <= 0
+        ]
+        if missing_held_prices:
+            raise RuntimeError(
+                "Cannot safely reconcile holdings without prices: "
+                + ", ".join(sorted(missing_held_prices))
+            )
         market_caps = self.market_data.fetch_market_caps(sorted_universe)
+        market_cap_sources = dict(getattr(self.market_data, "market_cap_sources", {}))
+        unknown_market_caps = sorted(
+            ticker for ticker, source in market_cap_sources.items() if source == "UNKNOWN"
+        )
+        if unknown_market_caps:
+            data_quality_warnings.append(
+                "Market cap unavailable; neutral weighting used for "
+                + ", ".join(unknown_market_caps)
+                + "."
+            )
 
         # Recalculate total portfolio value using live market prices
         current_equity_live = sum(
@@ -259,6 +310,16 @@ class PortfolioManagerEngine:
             signals=active_signals,
             clusters=clusters,
             market_caps=market_caps,
+        )
+        diagnostics = dict(getattr(self.optimizer, "last_diagnostics", {}))
+        expired_weight_cap = getattr(self, "expired_weight_cap", 0.10)
+        if expired_weight_cap > 0 and expired_cap_tickers:
+            for ticker in expired_cap_tickers:
+                if ticker in portfolio_state.holdings:
+                    target_weights[ticker] = min(target_weights.get(ticker, 0.0), expired_weight_cap)
+        diagnostics["target_equity_weight"] = round(sum(target_weights.values()), 6)
+        diagnostics["unused_equity_budget"] = round(
+            max(0.0, 1.0 - self.optimizer.min_cash_reserve - sum(target_weights.values())), 6
         )
 
         # 6. Step 5: Reconciliation & Order Sizing
@@ -300,6 +361,43 @@ class PortfolioManagerEngine:
                             a.action = "HOLD"
                             a.order_shares = 0.0
                             a.reason = "CASH_GUARD_SUB_FLOOR"
+
+        unsafe_candidate_prices = {
+            ticker for ticker, source in price_sources.items()
+            if source != "LIVE" and ticker not in portfolio_state.holdings
+        }
+        safe_mode = bool(missing_held_prices or unknown_market_caps or unsafe_candidate_prices)
+        if unsafe_candidate_prices:
+            for allocation in allocations:
+                if allocation.ticker in unsafe_candidate_prices and allocation.action == "BUY":
+                    allocation.action = "HOLD"
+                    allocation.order_shares = 0.0
+                    allocation.reason = "SAFE_MODE_DATA_QUALITY"
+            data_quality_warnings.append(
+                "Safe mode active: candidate buys without live prices were suppressed until data quality is restored."
+            )
+        if unknown_market_caps:
+            for allocation in allocations:
+                if allocation.ticker in unknown_market_caps and allocation.action == "BUY":
+                    allocation.action = "HOLD"
+                    allocation.order_shares = 0.0
+                    allocation.reason = "SAFE_MODE_DATA_QUALITY"
+
+        active_missing_reports = {
+            ticker for ticker in sorted_universe if ticker not in parsed_signals
+        }
+        missing_report_buy_policy = getattr(self, "missing_report_buy_policy", "block")
+        if missing_report_buy_policy == "block" and active_missing_reports:
+            for allocation in allocations:
+                if allocation.ticker in active_missing_reports and allocation.action == "BUY":
+                    allocation.action = "HOLD"
+                    allocation.order_shares = 0.0
+                    allocation.reason = "MISSING_REPORT_BUY_BLOCKED"
+            data_quality_warnings.append(
+                "New buys blocked for holdings without current research: "
+                + ", ".join(sorted(active_missing_reports))
+                + "."
+            )
 
         # Final Cash Flow Summary
         total_buys = sum(a.order_shares * a.realtime_price for a in allocations if a.action == "BUY")
@@ -386,4 +484,12 @@ class PortfolioManagerEngine:
             source_file=portfolio_state.source_file,
             download_time=portfolio_state.download_time,
             execution_timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            safe_mode=safe_mode,
+            data_quality_warnings=data_quality_warnings,
+            quote_sources=price_sources,
+            market_cap_sources=market_cap_sources,
+            target_equity_weight=float(diagnostics.get("target_equity_weight", sum(target_weights.values()))),
+            unused_equity_budget=float(diagnostics.get("unused_equity_budget", 0.0)),
+            binding_constraints=list(diagnostics.get("binding_constraints", [])),
+            expired_holding_policy=getattr(self, "expired_holding_policy", "neutral"),
         )

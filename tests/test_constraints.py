@@ -117,6 +117,24 @@ def test_option_5_market_cap_tiering():
     assert abs(sum(weights.values()) - 0.90) < 1e-4
 
 
+def test_optimizer_exposes_unused_budget_and_binding_constraints():
+    optimizer = PortfolioConstraintOptimizer(
+        max_position_weight=0.15,
+        min_cash_reserve=0.10,
+        max_cluster_exposure=0.25,
+    )
+    tickers = ["A", "B", "C"]
+    weights = optimizer.optimize_weights(
+        tickers,
+        {ticker: SignalType.EQUAL_WEIGHT for ticker in tickers},
+        {1: tickers},
+    )
+
+    assert sum(weights.values()) <= 0.90
+    assert optimizer.last_diagnostics["target_equity_weight"] == round(sum(weights.values()), 6)
+    assert "cluster:1" in optimizer.last_diagnostics["binding_constraints"]
+
+
 def test_dry_powder_cash_reserve_guard():
     # Verify that total buys are scaled so ending cash never drops below 15% reserve
     from pm.models import AllocationResult, Holding, PortfolioState
@@ -171,4 +189,3 @@ def test_dry_powder_cash_reserve_guard():
     # Ending cash must be >= 15% reserve ($15,000)
     assert projected_ending_cash >= target_cash_reserve
     assert abs(projected_ending_cash - 15000.0) < 1.0
-

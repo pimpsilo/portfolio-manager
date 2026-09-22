@@ -53,3 +53,30 @@ python main.py --execute
 ```bash
 pytest tests -v
 ```
+
+### Configuration and data-quality checks
+
+Validate paths and risk settings without loading a broker export:
+
+```bash
+python main.py --validate-config
+```
+
+Solver runs surface data-quality warnings when market data falls back to the broker
+export or when market-cap data is unavailable. If a held position has no usable
+price, the run stops instead of generating unsafe order sizes; missing market-cap
+data uses neutral weighting and suppresses new buys.
+
+### Parameter evaluation
+
+Evaluate allocation parameter variants against a cached historical price CSV:
+
+```bash
+python main.py --backtest scratch/backtest_prices.csv \
+  --backtest-output scratch/backtest_results.csv
+```
+
+The sweep compares cash-reserve and position-cap variants using total return,
+annualized return and volatility, Sharpe/Sortino, maximum drawdown, turnover,
+and rebalance count. It is an evaluation aid, not a prediction or trade
+recommendation.

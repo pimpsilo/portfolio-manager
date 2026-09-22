@@ -1,6 +1,7 @@
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
+import pytest
 from pm.ingest.broker_csv import BrokerCSVParser
 from pm.ingest.markdown_signals import MarkdownSignalParser
 from pm.models import SignalType
@@ -46,6 +47,17 @@ def test_broker_csv_download_time_footer():
     state = parser.parse(f_path)
     assert state.download_time == "Sep-11-2026 3:24 p.m ET"
     assert state.source_file == Path(f_path).name
+
+
+def test_broker_csv_rejects_file_without_portfolio_rows():
+    sample_csv = '"Account number","Symbol","Description","Quantity","Last price","Current value"\n'
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".csv") as f:
+        f.write(sample_csv)
+        f_path = f.name
+
+    parser = BrokerCSVParser()
+    with pytest.raises(ValueError, match="no portfolio or cash rows"):
+        parser.parse(f_path)
 
 
 

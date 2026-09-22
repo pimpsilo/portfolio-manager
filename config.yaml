@@ -7,6 +7,11 @@ signals:
   max_age_days: 14               # Reports older than 14 days are expired
   stale_warning_days: 4          # Alert if report expires in <= 4 days (i.e. age >= 10 days)
   candidate_min_signal: "OVERWEIGHT"
+  expired_holding_policy: "neutral" # neutral | cap | trim
+  long_expired_days: 30
+  long_expired_policy: "trim"       # neutral | cap | trim
+  expired_weight_cap: 0.10
+  missing_report_buy_policy: "block" # block | allow
   restrict_candidates_to_watchlist: true # Enforce that only tickers in stocks.csv or holdings enter investable universe
   excluded_tickers: ["GEV"]      # Explicit blacklist of tickers that will never enter the universe or receive capital
 
@@ -92,5 +97,4 @@ output:
   prefer_complete_report: true     # link complete_report.md over decision.md
   date_layout: "stacked"           # "stacked" (with <br>) | "inline"
   append_daily_snapshots: true     # append intra-day runs to Trade_Orders_YYYY-MM-DD.md
-
 

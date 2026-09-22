@@ -32,6 +32,8 @@ class MarketDataService:
         self.lookback_days = lookback_days
         self._price_cache: Dict[str, float] = {}
         self._market_cap_cache: Dict[str, float] = {}
+        self.price_sources: Dict[str, str] = {}
+        self.market_cap_sources: Dict[str, str] = {}
         self._history_cache: Optional[pd.DataFrame] = None
 
     def fetch_realtime_prices(
@@ -71,16 +73,20 @@ class MarketDataService:
 
                 if price is not None and not np.isnan(price) and price > 0:
                     results[sym] = float(price)
+                    self.price_sources[sym] = "LIVE"
                 elif sym in fallback_prices and fallback_prices[sym] > 0:
                     logger.info(f"Using fallback CSV price for {sym}: ${fallback_prices[sym]:.2f}")
                     results[sym] = fallback_prices[sym]
+                    self.price_sources[sym] = "CSV_FALLBACK"
                 else:
                     results[sym] = 0.0
+                    self.price_sources[sym] = "MISSING"
 
         except Exception as e:
             logger.error(f"Bulk ticker fetch error: {e}")
             for sym in unique_tickers:
                 results[sym] = fallback_prices.get(sym, 0.0)
+                self.price_sources[sym] = "CSV_FALLBACK" if results[sym] > 0 else "MISSING"
 
         self._price_cache.update(results)
         return results
@@ -110,12 +116,17 @@ class MarketDataService:
 
                 if mc and not np.isnan(mc) and mc > 0:
                     results[sym] = float(mc)
+                    self.market_cap_sources[sym] = "YFINANCE"
                 else:
-                    results[sym] = DEFAULT_MARKET_CAPS.get(sym, 35e9)
+                    fallback = DEFAULT_MARKET_CAPS.get(sym)
+                    results[sym] = fallback if fallback is not None else 0.0
+                    self.market_cap_sources[sym] = "STATIC_FALLBACK" if fallback is not None else "UNKNOWN"
         except Exception as e:
             logger.warning(f"Error in bulk market cap fetch: {e}")
             for sym in unique_tickers:
-                results[sym] = DEFAULT_MARKET_CAPS.get(sym, 35e9)
+                fallback = DEFAULT_MARKET_CAPS.get(sym)
+                results[sym] = fallback if fallback is not None else 0.0
+                self.market_cap_sources[sym] = "STATIC_FALLBACK" if fallback is not None else "UNKNOWN"
 
         self._market_cap_cache.update(results)
         return results

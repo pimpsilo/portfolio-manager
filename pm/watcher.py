@@ -98,7 +98,7 @@ class DownloadWatcher:
                     now_str = datetime.now().strftime("%H:%M:%S")
                     print(f"\n⚡ [{now_str}] New/Updated broker CSV detected: {current_csv.name}")
                     print(f"   Waiting {self.debounce_seconds}s for browser download completion...")
-                    time.sleep(self.debounce_seconds)
+                    self._wait_for_stable_file(current_csv)
 
                     self._last_seen_file = current_csv
                     self._last_seen_mtime = current_csv.stat().st_mtime
@@ -118,6 +118,22 @@ class DownloadWatcher:
             except Exception as e:
                 print(f"⚠️ Error during auto-rebalance: {e}")
                 time.sleep(self.poll_interval)
+
+    def _wait_for_stable_file(self, path: Path) -> None:
+        """Wait until a browser download stops changing before parsing it."""
+        deadline = time.monotonic() + max(self.debounce_seconds, 2.0)
+        previous = None
+        while time.monotonic() < deadline:
+            try:
+                stat = path.stat()
+            except OSError as exc:
+                raise RuntimeError(f"Broker CSV disappeared during download: {path}") from exc
+            current = (stat.st_size, stat.st_mtime_ns)
+            if current == previous and stat.st_size > 0:
+                return
+            previous = current
+            time.sleep(min(0.25, max(self.poll_interval / 2, 0.05)))
+        raise RuntimeError(f"Broker CSV did not stabilize before timeout: {path}")
 
 
 if __name__ == "__main__":

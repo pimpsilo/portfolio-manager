@@ -118,6 +118,14 @@ class ReconciliationSummary:
     source_file: Optional[str] = None
     download_time: Optional[str] = None
     execution_timestamp: Optional[str] = None
+    safe_mode: bool = False
+    data_quality_warnings: List[str] = field(default_factory=list)
+    quote_sources: Dict[str, str] = field(default_factory=dict)
+    market_cap_sources: Dict[str, str] = field(default_factory=dict)
+    target_equity_weight: float = 0.0
+    unused_equity_budget: float = 0.0
+    binding_constraints: List[str] = field(default_factory=list)
+    expired_holding_policy: str = "neutral"
 
 
 @dataclass
@@ -161,4 +169,3 @@ class TriagePlan:
         if limit is not None and limit > 0:
             return q[:limit]
         return q
-

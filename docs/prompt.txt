@@ -1,0 +1,118 @@
+(async () => {
+  console.log("🔍 Extracting credentials from browser storage...");
+
+  // 1. Get Composer Session ID and Device ID (required by backend)
+  const sessionId = localStorage.getItem("composerSessionId") || window.sessionAuth?.getSessionId();
+  const deviceId = localStorage.getItem("deviceId") || window.sessionAuth?.getDeviceId();
+  console.log("Composer Session ID:", sessionId ? "Found" : "Missing");
+  console.log("Device ID:", deviceId ? "Found" : "Missing");
+
+  // 2. Extract Firebase auth tokens from IndexedDB
+  const authData = await new Promise((resolve) => {
+    try {
+      const req = indexedDB.open("firebaseLocalStorageDb");
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("firebaseLocalStorage")) return resolve(null);
+        const tx = db.transaction("firebaseLocalStorage", "readonly");
+        const store = tx.objectStore("firebaseLocalStorage");
+        const getReq = store.getAll();
+        getReq.onsuccess = () => {
+          const item = getReq.result?.[0]?.value;
+          resolve(item?.stsTokenManager || null);
+        };
+        getReq.onerror = () => resolve(null);
+      };
+      req.onerror = () => resolve(null);
+    } catch (e) {
+      resolve(null);
+    }
+  });
+
+  if (!authData?.refreshToken) {
+    console.error("❌ Could not find Firebase auth credentials in storage. Make sure you are logged in on app.composer.trade!");
+    return;
+  }
+
+  // 3. Refresh token to guarantee it is 100% active and unexpired
+  console.log("🔄 Minting fresh access token...");
+  const fbKey = "AIzaSyCeRmAxJkaErOZc3ajGI-4irz-AuoxpBCA";
+  const refreshRes = await fetch(`https://securetoken.googleapis.com/v1/token?key=${fbKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `grant_type=refresh_token&refresh_token=${authData.refreshToken}`
+  });
+  const refreshData = await refreshRes.json();
+  const token = refreshData.id_token || refreshData.access_token || authData.accessToken;
+
+  if (!token) {
+    console.error("❌ Failed to obtain valid access token.");
+    return;
+  }
+  console.log("✅ Fresh access token obtained!");
+
+  // 4. Construct complete headers required by Composer backend
+  const headers = {
+    "Authorization": `Bearer ${token}`,
+    "Content-Type": "application/json",
+    "accept": "application/json",
+    "x-device-platform": "web"
+  };
+  if (sessionId) headers["X-Session-Id"] = sessionId;
+  if (deviceId) headers["x-device-id"] = deviceId;
+
+  const downloadJson = (data, filename) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    console.log(`🎉 SUCCESS! Downloaded ${filename}`);
+  };
+
+  // Step A: Attempt direct score fetch
+  console.log("1️⃣ Checking if logic tree is directly readable...");
+  try {
+    const scoreRes = await fetch("https://backtest-api.composer.trade/api/v1/public/symphonies/RZON7KyQqrVPk6vCW0c1/score", { headers });
+    if (scoreRes.ok) {
+      const scoreJson = await scoreRes.json();
+      downloadJson(scoreJson, "RZON7KyQqrVPk6vCW0c1_logic.json");
+      return;
+    } else {
+      console.log(`Direct score returned status ${scoreRes.status}`);
+    }
+  } catch (e) {}
+
+  // Step B: Copy to user account
+  console.log("2️⃣ Copying symphony to your drafts...");
+  try {
+    const copyRes = await fetch("https://backtest-api.composer.trade/api/v1/symphonies/RZON7KyQqrVPk6vCW0c1/copy", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ "symphony-name": "Extended NoVixRotator Copy" })
+    });
+    const copyData = await copyRes.json();
+    console.log("Copy response:", copyData);
+
+    const newId = copyData.symphony_id || copyData.copy_id || copyData.id;
+    if (newId) {
+      console.log(`✅ Successfully copied! New ID: ${newId}. Fetching score tree...`);
+      const newScoreRes = await fetch(`https://backtest-api.composer.trade/api/v1/symphonies/${newId}/score`, { headers });
+      if (newScoreRes.ok) {
+        const newScoreJson = await newScoreRes.json();
+        downloadJson(newScoreJson, `${newId}_logic.json`);
+        return;
+      } else {
+        console.error("Failed to fetch score of copied symphony:", await newScoreRes.text());
+      }
+    } else {
+      console.error("❌ Copy rejected by Composer:", copyData);
+    }
+  } catch (e) {
+    console.error("❌ Network error:", e);
+  }
+})();

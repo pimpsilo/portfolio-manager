@@ -68,6 +68,7 @@ class BrokerCSVParser:
         with open(target_path, "r", encoding="utf-8-sig", errors="ignore") as f:
             reader = csv.reader(f)
             headers: Optional[List[str]] = None
+            parsed_rows = 0
 
             for row in reader:
                 if not row:
@@ -129,6 +130,12 @@ class BrokerCSVParser:
                     cost_basis=cost_basis,
                     unrealized_gain_loss=unrealized_gain,
                 )
+                parsed_rows += 1
+
+        if headers is None:
+            raise ValueError(f"Broker CSV has no recognizable header: {target_path}")
+        if parsed_rows == 0 and cash_balance <= 0:
+            raise ValueError(f"Broker CSV contains no portfolio or cash rows: {target_path}")
 
         equity_value = sum(h.current_value for h in holdings.values())
         total_value = equity_value + cash_balance

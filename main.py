@@ -45,6 +45,9 @@ def main():
     parser.add_argument("--watch", action="store_true", help="Monitor ~/Downloads for new CSV and auto-execute")
     parser.add_argument("--preview", action="store_true", help="Display verification tables without writing", default=True)
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing daily report instead of appending a new snapshot")
+    parser.add_argument("--validate-config", action="store_true", help="Validate configuration and exit")
+    parser.add_argument("--backtest", type=str, help="Evaluate parameter grid against a price CSV")
+    parser.add_argument("--backtest-output", type=str, default=None, help="Optional CSV path for backtest results")
 
     # New TradingAgents integration flags
     parser.add_argument("--triage", action="store_true", help="Audit watchlist and holdings reports to display evaluation queue")
@@ -59,6 +62,26 @@ def main():
     parser.add_argument("--trade-date", type=str, default=None, help="Target evaluation trade date (YYYY-MM-DD); defaults to latest settled trading day")
 
     args = parser.parse_args()
+
+    if args.validate_config:
+        from pm.config import validate_config
+        import yaml
+        with open(args.config, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        warnings = validate_config(config, args.config)
+        print(f"Configuration valid: {args.config}")
+        for warning in warnings:
+            print(f"WARNING: {warning}")
+        return
+
+    if args.backtest:
+        from pm.backtest import BacktestConfig, load_prices, run_parameter_sweep, write_results
+        prices = load_prices(args.backtest)
+        results = run_parameter_sweep(prices, BacktestConfig())
+        print(results.to_string(index=False))
+        if args.backtest_output:
+            print(f"\nSaved backtest results to {write_results(results, args.backtest_output)}")
+        return
 
     if args.watch:
         watcher = DownloadWatcher(config_path=args.config)
@@ -136,6 +159,12 @@ def main():
     print(f"💵 Available Cash       : ${summary.current_cash:,.2f} ({summary.current_cash/summary.total_portfolio_value*100:.1f}%)")
     print(f"🛡️ Target Cash Reserve  : ${summary.target_cash_reserve:,.2f} ({summary.target_cash_reserve/summary.total_portfolio_value*100:.1f}%)")
     print(f"🏦 Projected Ending Cash: ${summary.projected_ending_cash:,.2f} ({summary.projected_ending_cash/summary.total_portfolio_value*100:.1f}%)\n")
+    if summary.safe_mode:
+        print("⚠️  DATA QUALITY: SAFE MODE ACTIVE — new buy directives may be suppressed.")
+    for warning in summary.data_quality_warnings:
+        print(f"   ⚠️ {warning}")
+    if summary.data_quality_warnings:
+        print()
 
     # 1. Active Directives Table (sell orders then buy orders, alphabetically by ticker)
     active_orders = [a for a in summary.allocations if a.action in ("BUY", "SELL") and a.order_shares > 0]

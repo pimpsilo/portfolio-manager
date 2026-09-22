@@ -35,6 +35,7 @@ class PortfolioConstraintOptimizer:
         self.max_cluster_exposure = max_cluster_exposure
         self.multipliers = multipliers or self.DEFAULT_MULTIPLIERS
         self.market_cap_cfg = market_cap_cfg or {}
+        self.last_diagnostics: Dict[str, object] = {}
 
     def get_cap_tier_multiplier(self, market_cap: Optional[float]) -> float:
         """
@@ -98,6 +99,9 @@ class PortfolioConstraintOptimizer:
         # Normalize to available equity budget (<= 90%)
         weights = {t: (v / total_raw) * max_equity_budget for t, v in raw_weights.items()}
 
+        initial_total = sum(weights.values())
+        binding_constraints: List[str] = []
+
         # 2. Iterative Constraint Enforcement (Caps on single position and clusters)
         # Max iterations to converge
         for iteration in range(10):
@@ -107,6 +111,7 @@ class PortfolioConstraintOptimizer:
             for t in list(weights.keys()):
                 if weights[t] > self.max_position_weight:
                     weights[t] = self.max_position_weight
+                    binding_constraints.append(f"position:{t}")
                     violation_found = True
 
             # Check 2: Cluster Exposure Cap (25%)
@@ -120,6 +125,7 @@ class PortfolioConstraintOptimizer:
                     scale_factor = self.max_cluster_exposure / cluster_total
                     for m in active_members:
                         weights[m] *= scale_factor
+                    binding_constraints.append(f"cluster:{c_id}")
                     violation_found = True
 
             # Check 3: Budget check
@@ -149,4 +155,12 @@ class PortfolioConstraintOptimizer:
 
         # Round very small epsilon weights
         weights = {t: round(w, 6) if w > 1e-5 else 0.0 for t, w in weights.items()}
+        final_total = sum(weights.values())
+        self.last_diagnostics = {
+            "initial_equity_weight": round(initial_total, 6),
+            "target_equity_weight": round(final_total, 6),
+            "unused_equity_budget": round(max_equity_budget - final_total, 6),
+            "max_equity_budget": max_equity_budget,
+            "binding_constraints": sorted(set(binding_constraints)),
+        }
         return weights
