@@ -555,3 +555,36 @@ def test_daily_snapshot_append_and_idempotency(sample_vault):
     assert "\n\n---\n\n" not in content4
 
 
+def test_reporter_updates_daily_pointer_file(sample_vault, tmp_path):
+    pointer_path = tmp_path / "Daily" / "_trade_order_latest.txt"
+    reporter = MarkdownTradeReporter(
+        output_dir=str(sample_vault["vault_dir"]),
+        daily_pointer_file=str(pointer_path),
+    )
+
+    summary = ReconciliationSummary(
+        total_portfolio_value=100000.0,
+        current_cash=20000.0,
+        target_cash_reserve=15000.0,
+        projected_ending_cash=20000.0,
+        total_buys_dollars=0.0,
+        total_sells_dollars=0.0,
+        allocations=[],
+        clusters={},
+        aging_signals=[],
+        expired_signals=[],
+        all_signals=[],
+        max_age_days=14,
+        execution_date=date(2026, 9, 23),
+        source_file="Portfolio_Positions_Sep-23-2026.csv",
+        download_time="Sep-23-2026 10:08 a.m ET",
+        execution_timestamp="2026-09-23 10:08:49",
+    )
+
+    assert not pointer_path.exists()
+    reporter.write_report(summary)
+    assert pointer_path.exists()
+    assert pointer_path.read_text(encoding="utf-8").strip() == "2026-09-23"
+
+
+

@@ -255,6 +255,7 @@ def main():
     print(format_table(c_headers, c_rows))
 
     # 4. Output Generation if --execute
+    paths_cfg = engine.config.get("paths", {})
     output_cfg = engine.config.get("output", {})
     reporter = MarkdownTradeReporter(
         engine.obsidian_vault_dir,
@@ -262,6 +263,7 @@ def main():
         prefer_complete_report=output_cfg.get("prefer_complete_report", True),
         date_layout=output_cfg.get("date_layout", "stacked"),
         append_daily_snapshots=output_cfg.get("append_daily_snapshots", True),
+        daily_pointer_file=paths_cfg.get("daily_pointer_file"),
     )
     if args.execute:
         saved_path = reporter.write_report(summary, overwrite=args.overwrite)

@@ -22,12 +22,14 @@ class MarkdownTradeReporter:
         prefer_complete_report: bool = True,
         date_layout: str = "stacked",
         append_daily_snapshots: bool = True,
+        daily_pointer_file: Optional[str] = None,
     ):
         self.output_dir = Path(output_dir)
         self.link_style = link_style
         self.prefer_complete_report = prefer_complete_report
         self.date_layout = date_layout
         self.append_daily_snapshots = append_daily_snapshots
+        self.daily_pointer_file = Path(daily_pointer_file) if daily_pointer_file else None
 
     def _report_md_link(
         self,
@@ -489,12 +491,14 @@ class MarkdownTradeReporter:
         if overwrite or not self.append_daily_snapshots or not target_path.exists():
             content = self.generate_report_markdown(summary)
             target_path.write_text(content, encoding="utf-8")
+            self._update_daily_pointer(summary.execution_date)
             return target_path
 
         existing_content = target_path.read_text(encoding="utf-8")
         if not existing_content.strip() or "## ⏱️ Snapshot:" not in existing_content:
             content = self.generate_report_markdown(summary)
             target_path.write_text(content, encoding="utf-8")
+            self._update_daily_pointer(summary.execution_date)
             return target_path
 
         snapshot_body = self.generate_snapshot_markdown(summary)
@@ -517,9 +521,20 @@ class MarkdownTradeReporter:
                     new_blocks.append(block)
             if replaced:
                 target_path.write_text("\n\n---\n\n".join(new_blocks).rstrip() + "\n", encoding="utf-8")
+                self._update_daily_pointer(summary.execution_date)
                 return target_path
 
         # If not previously recorded, append new snapshot block separated by horizontal rule
         new_content = existing_content.rstrip() + "\n\n---\n\n" + snapshot_body + "\n"
         target_path.write_text(new_content, encoding="utf-8")
+        self._update_daily_pointer(summary.execution_date)
         return target_path
+
+    def _update_daily_pointer(self, exec_date: Union[date, str]) -> None:
+        if self.daily_pointer_file:
+            try:
+                date_str = exec_date.isoformat() if hasattr(exec_date, "isoformat") else str(exec_date)
+                self.daily_pointer_file.parent.mkdir(parents=True, exist_ok=True)
+                self.daily_pointer_file.write_text(date_str.strip() + "\n", encoding="utf-8")
+            except Exception:
+                pass

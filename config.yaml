@@ -2,6 +2,7 @@ paths:
   reports_dir: "/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/01_agent_reports"
   downloads_dir: "/Users/matthewhope/Downloads"
   obsidian_vault_dir: "/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Portfolio/00_trade_orders"
+  daily_pointer_file: "/Users/matthewhope/Library/Mobile Documents/iCloud~md~obsidian/Documents/Matt Hope/Daily/_trade_order_latest.txt"
 
 signals:
   max_age_days: 14               # Reports older than 14 days are expired
