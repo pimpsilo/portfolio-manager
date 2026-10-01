@@ -17,14 +17,38 @@ def validate_config(config: Dict[str, Any], config_path: str) -> List[str]:
     paths = config.get("paths", {})
     warnings: List[str] = []
 
+    max_pos = risk.get("max_single_stock_exposure", risk.get("max_position_weight", 0.15))
     bounded = (
-        ("risk.max_position_weight", risk.get("max_position_weight", 0.15), 0, 1),
+        ("risk.max_single_stock_exposure", max_pos, 0, 1),
         ("risk.min_cash_reserve", risk.get("min_cash_reserve", 0.15), 0, 1),
         ("risk.max_cluster_exposure", risk.get("max_cluster_exposure", 0.25), 0, 1),
     )
     for name, value, lower, upper in bounded:
         if not isinstance(value, (int, float)) or not lower < value <= upper:
             raise ConfigurationError(f"{name} must be greater than {lower} and at most {upper}.")
+
+    max_assets = risk.get("max_assets_per_cluster")
+    if max_assets is not None and (not isinstance(max_assets, int) or max_assets < 1):
+        raise ConfigurationError("risk.max_assets_per_cluster must be an integer of at least 1.")
+
+    clustering = risk.get("clustering", {})
+    if isinstance(clustering, dict):
+        k_val = clustering.get("k", clustering.get("target_clusters"))
+        if k_val is not None and (not isinstance(k_val, int) or k_val < 2):
+            raise ConfigurationError("risk.clustering.k must be an integer of at least 2.")
+        if clustering.get("criterion") and clustering.get("criterion") not in {"maxclust", "distance"}:
+            raise ConfigurationError("risk.clustering.criterion must be 'maxclust' or 'distance'.")
+        if clustering.get("method") and clustering.get("method") not in {"average", "complete", "single"}:
+            raise ConfigurationError("risk.clustering.method must be 'average', 'complete', or 'single'.")
+        if clustering.get("concentration_guide") and clustering.get("concentration_guide") not in {
+            "composite", "sharpe", "upside", "market_cap"
+        }:
+            raise ConfigurationError(
+                "risk.clustering.concentration_guide must be 'composite', 'sharpe', 'upside', or 'market_cap'."
+            )
+        dist_thresh = clustering.get("distance_threshold")
+        if dist_thresh is not None and (not isinstance(dist_thresh, (int, float)) or not 0 < dist_thresh <= 2):
+            raise ConfigurationError("risk.clustering.distance_threshold must be between 0 and 2.")
 
     positive = (
         ("rebalance.min_dollar_trade", rebalance.get("min_dollar_trade", 1500.0)),

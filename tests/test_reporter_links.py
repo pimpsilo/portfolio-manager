@@ -225,6 +225,7 @@ def test_full_report_markdown_generation_and_no_wikilinks(sample_vault):
     # 1. Assert NO wikilinks anywhere in the generated output
     assert "[[" not in md
     assert "]]" not in md
+    assert "<details open>" not in md
 
     # 2. Execution Directives table asserts
     assert "**[AAPL](../01_agent_reports/AAPL/AAPL_20260905_105303/complete_report.md)**<br>" in md
@@ -250,6 +251,59 @@ def test_full_report_markdown_generation_and_no_wikilinks(sample_vault):
     assert written_file.exists()
     assert written_file.name == "Trade_Orders_2026-09-10.md"
     assert written_file.read_text(encoding="utf-8") == md
+
+
+def test_sections_two_through_six_start_collapsed(sample_vault):
+    reporter = MarkdownTradeReporter(output_dir=str(sample_vault["vault_dir"]))
+
+    allocation = AllocationResult(
+        ticker="AAPL",
+        current_shares=10.0,
+        realtime_price=300.0,
+        current_value=3000.0,
+        current_weight=30.0,
+        signal=SignalType.OVERWEIGHT,
+        cluster_id=1,
+        base_weight=2.0,
+        target_weight=4.0,
+        target_value=4000.0,
+        dollar_delta=1000.0,
+        drift_pct=1.0,
+        action="BUY",
+        order_shares=3.0,
+        is_whole_share=True,
+        reason="REBALANCE_BUY_STEP",
+        report_path=sample_vault["aapl_source"],
+        report_date=date(2026, 9, 5),
+    )
+    summary = ReconciliationSummary(
+        total_portfolio_value=100000.0,
+        current_cash=20000.0,
+        target_cash_reserve=15000.0,
+        projected_ending_cash=19100.0,
+        total_buys_dollars=900.0,
+        total_sells_dollars=0.0,
+        allocations=[allocation],
+        clusters={1: ["AAPL"]},
+        aging_signals=[],
+        expired_signals=[],
+        max_age_days=14,
+        execution_date=date(2026, 9, 10),
+    )
+
+    md = reporter.generate_report_markdown(summary)
+
+    assert "## 🎯 1. Immediate / Daily Actions" in md
+    assert "## ⏳ 2. Reports Summary" in md
+    assert "### Aging / Stale Reports Summary" in md
+    assert "### Non-Portfolio Securities with Active Agent Reports & Status" in md
+    assert "### Securities without Active Agent Reports" in md
+    assert "### All Securities with Agent Reports" in md
+    assert "## 📊 3.Portfolio" in md
+    assert "### Full Portfolio Rebalance & Drift Ledger" in md
+    assert "### Correlated Asset Clusters & Exposure" in md
+    assert "<details>" in md
+    assert "<details open>" not in md
 
 
 def test_five_sections_in_trade_order_report(sample_vault):
@@ -388,26 +442,29 @@ def test_five_sections_in_trade_order_report(sample_vault):
     assert pos_bbb < pos_yyy, "Buys should be sorted alphabetically"
 
     # Section 2 checks:
-    assert "## ⏳ 2. Aging / Stale Reports Summary" in md
+    assert "## ⏳ 2. Reports Summary" in md
+    assert "### Aging / Stale Reports Summary" in md
 
-    # Section 3 checks:
-    assert "## 📊 3. Full Portfolio Rebalance & Drift Ledger" in md
-
-    # Section 4 checks:
-    assert "## 🌐 4. Non-Portfolio Securities with Active Agent Reports & Status" in md
+    # Subsections under 2:
+    assert "### Non-Portfolio Securities with Active Agent Reports & Status" in md
     assert "CAVA" in md
     assert "BBB" in md
 
-    # Section 5 checks (Securities without Active Agent Reports):
-    assert "## ⚠️ 5. Securities without Active Agent Reports" in md
+    # Securities without Active Agent Reports:
+    assert "### Securities without Active Agent Reports" in md
     assert "*All portfolio holdings and watchlist securities have active agent research reports on file. Zero missing or expired reports.*" in md
 
-    # Section 6 checks (All Securities with Agent Reports):
-    assert "## 📋 6. All Securities with Agent Reports" in md
+    # All Securities with Agent Reports:
+    assert "### All Securities with Agent Reports" in md
     assert "Maintain current exposure in CAVA without deploying new capital." in md
     assert "Trim AAA to reduce defensive exposure." in md
     assert "$78.00" in md
     assert "$180.00" in md
+
+    # Section 3 checks:
+    assert "## 📊 3.Portfolio" in md
+    assert "### Full Portfolio Rebalance & Drift Ledger" in md
+    assert "### Correlated Asset Clusters & Exposure" in md
 
 
 def test_securities_without_active_agent_reports_section(sample_vault):
@@ -465,7 +522,7 @@ def test_securities_without_active_agent_reports_section(sample_vault):
 
     md = reporter.generate_report_markdown(summary)
 
-    assert "## ⚠️ 5. Securities without Active Agent Reports" in md
+    assert "### Securities without Active Agent Reports" in md
     assert "FICO" in md
     assert "No (0 shs · Watchlist)" in md
     assert "🛑 **Missing** (No report)" in md

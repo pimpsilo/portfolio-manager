@@ -260,14 +260,16 @@ def test_output_paths_single_run_structural_parity(parity_env):
     # Verify structural sections in all outputs
     for c in (content_a, content_b, content_c, content_d):
         assert "# Trade Execution Orders — 2026-09-12" in c
-        assert "## ⏱️ Snapshot: Sep-12-2026 9:43 a.m ET (Source: `Portfolio_Positions_Sep-12-2026.csv`)" in c
+        assert "# ⏱️ Snapshot: Sep-12-2026 9:43 a.m ET (Source: `Portfolio_Positions_Sep-12-2026.csv`)" in c
         assert "## 🎯 1. Immediate / Daily Actions" in c
-        assert "## ⏳ 2. Aging / Stale Reports Summary" in c
-        assert "## 📊 3. Full Portfolio Rebalance & Drift Ledger" in c
-        assert "## 🌐 4. Non-Portfolio Securities with Active Agent Reports & Status" in c
-        assert "## ⚠️ 5. Securities without Active Agent Reports" in c
-        assert "## 📋 6. All Securities with Agent Reports" in c
-        assert "## 🔗 Correlated Asset Clusters & Exposure" in c
+        assert "## ⏳ 2. Reports Summary" in c
+        assert "### Aging / Stale Reports Summary" in c
+        assert "### Non-Portfolio Securities with Active Agent Reports & Status" in c
+        assert "### Securities without Active Agent Reports" in c
+        assert "### All Securities with Agent Reports" in c
+        assert "## 📊 3.Portfolio" in c
+        assert "### Full Portfolio Rebalance & Drift Ledger" in c
+        assert "### Correlated Asset Clusters & Exposure" in c
         assert "HLIT" not in c
         assert "SPY" not in c
 
@@ -296,7 +298,7 @@ def test_output_paths_multi_snapshot_append_parity(parity_env):
     assert report_path.exists()
     c1 = report_path.read_text(encoding="utf-8")
     assert c1.count("# Trade Execution Orders — 2026-09-12") == 1
-    assert c1.count("## ⏱️ Snapshot:") == 1
+    assert c1.count("# ⏱️ Snapshot:") == 1
     assert "Portfolio_Positions_Sep-12-2026.csv" in c1
     assert "Sep-12-2026 9:43 a.m ET" in c1
     assert "\n\n---\n\n" not in c1
@@ -310,7 +312,7 @@ def test_output_paths_multi_snapshot_append_parity(parity_env):
 
     c2 = report_path.read_text(encoding="utf-8")
     assert c2.count("# Trade Execution Orders — 2026-09-12") == 1
-    assert c2.count("## ⏱️ Snapshot:") == 2
+    assert c2.count("# ⏱️ Snapshot:") == 2
     assert c2.count("\n\n---\n\n") == 1
     assert "Portfolio_Positions_Sep-12-2026.csv" in c2
     assert "Portfolio_Positions_Sep-12-2026 (1).csv" in c2
@@ -327,7 +329,7 @@ def test_output_paths_multi_snapshot_append_parity(parity_env):
 
     c3 = report_path.read_text(encoding="utf-8")
     assert c3.count("# Trade Execution Orders — 2026-09-12") == 1
-    assert c3.count("## ⏱️ Snapshot:") == 3
+    assert c3.count("# ⏱️ Snapshot:") == 3
     assert c3.count("\n\n---\n\n") == 2
     assert "Portfolio_Positions_Sep-12-2026.csv" in c3
     assert "Portfolio_Positions_Sep-12-2026 (1).csv" in c3
@@ -356,7 +358,7 @@ def test_output_paths_idempotency_cross_path(parity_env):
 
     report_path = vault_dir / "Trade_Orders_2026-09-12.md"
     c_before = report_path.read_text(encoding="utf-8")
-    assert c_before.count("## ⏱️ Snapshot:") == 2
+    assert c_before.count("# ⏱️ Snapshot:") == 2
     assert c_before.count("\n\n---\n\n") == 1
 
     # Re-run CSV 2 via Manual CLI prompt
@@ -368,7 +370,7 @@ def test_output_paths_idempotency_cross_path(parity_env):
         main.main()
 
     c_after = report_path.read_text(encoding="utf-8")
-    assert c_after.count("## ⏱️ Snapshot:") == 2, "Re-run must not create duplicate snapshot"
+    assert c_after.count("# ⏱️ Snapshot:") == 2, "Re-run must not create duplicate snapshot"
     assert c_after.count("\n\n---\n\n") == 1, "Divider count must remain exactly 1"
     assert c_after.count("Portfolio_Positions_Sep-12-2026 (1).csv") == 2  # Once in header, once in metadata line
 
@@ -393,7 +395,7 @@ def test_output_paths_overwrite_flag_parity(parity_env):
         watcher.process_file(csv2)
 
     report_path = vault_dir / "Trade_Orders_2026-09-12.md"
-    assert report_path.read_text(encoding="utf-8").count("## ⏱️ Snapshot:") == 2
+    assert report_path.read_text(encoding="utf-8").count("# ⏱️ Snapshot:") == 2
 
     # Overwrite using CLI --overwrite
     cli_argv = ["main.py", "--config", str(cfg_file), "--csv", str(csv2), "--execute", "--overwrite"]
@@ -404,7 +406,7 @@ def test_output_paths_overwrite_flag_parity(parity_env):
         main.main()
 
     c_overwritten = report_path.read_text(encoding="utf-8")
-    assert c_overwritten.count("## ⏱️ Snapshot:") == 1
+    assert c_overwritten.count("# ⏱️ Snapshot:") == 1
     assert "Portfolio_Positions_Sep-12-2026.csv" not in c_overwritten
     assert "Portfolio_Positions_Sep-12-2026 (1).csv" in c_overwritten
     assert "\n\n---\n\n" not in c_overwritten
@@ -412,7 +414,7 @@ def test_output_paths_overwrite_flag_parity(parity_env):
 
 def test_output_paths_legacy_format_auto_upgrade(parity_env):
     """
-    Verifies that when a file exists without '## ⏱️ Snapshot:' (legacy format),
+    Verifies that when a file exists without '# ⏱️ Snapshot:' (legacy format),
     all paths automatically replace the legacy structure with a clean snapshot layout.
     """
     mock_prices, mock_caps, mock_returns = _mock_market_data()
@@ -439,10 +441,10 @@ def test_output_paths_legacy_format_auto_upgrade(parity_env):
         watcher.process_file(csv1)
 
     c_upgraded = report_path.read_text(encoding="utf-8")
-    assert "## ⏱️ Snapshot:" in c_upgraded
+    assert "# ⏱️ Snapshot:" in c_upgraded
     assert "## 🎯 1. Immediate / Daily Actions" in c_upgraded
-    assert "## ⚠️ 5. Securities without Active Agent Reports" in c_upgraded
-    assert "## 📋 6. All Securities with Agent Reports" in c_upgraded
+    assert "### Securities without Active Agent Reports" in c_upgraded
+    assert "### All Securities with Agent Reports" in c_upgraded
     assert "HLIT" not in c_upgraded, "Legacy content must be cleanly replaced, not appended below"
 
 
@@ -464,7 +466,7 @@ def test_output_paths_watcher_overwrite_parity(parity_env):
         watcher.process_file(csv2)
 
     report_path = vault_dir / "Trade_Orders_2026-09-12.md"
-    assert report_path.read_text(encoding="utf-8").count("## ⏱️ Snapshot:") == 2
+    assert report_path.read_text(encoding="utf-8").count("# ⏱️ Snapshot:") == 2
 
     with patch.object(MarketDataService, "fetch_realtime_prices", return_value=mock_prices), \
          patch.object(MarketDataService, "fetch_market_caps", return_value=mock_caps), \
@@ -472,7 +474,7 @@ def test_output_paths_watcher_overwrite_parity(parity_env):
         watcher.process_file(csv2, overwrite=True)
 
     c_overwritten = report_path.read_text(encoding="utf-8")
-    assert c_overwritten.count("## ⏱️ Snapshot:") == 1
+    assert c_overwritten.count("# ⏱️ Snapshot:") == 1
     assert "Portfolio_Positions_Sep-12-2026.csv" not in c_overwritten
     assert "Portfolio_Positions_Sep-12-2026 (1).csv" in c_overwritten
 
@@ -516,7 +518,7 @@ def test_output_paths_mixed_sequence_symmetry(parity_env):
     content = report_path.read_text(encoding="utf-8")
 
     assert content.count("# Trade Execution Orders — 2026-09-12") == 1
-    assert content.count("## ⏱️ Snapshot:") == 3
+    assert content.count("# ⏱️ Snapshot:") == 3
     assert content.count("\n\n---\n\n") == 2
 
     # Verify chronological sequence

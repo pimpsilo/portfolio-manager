@@ -238,19 +238,31 @@ def main():
         print(format_table(un_headers, un_rows))
 
     # 5. Correlated Clusters Summary
+    cap_pct = getattr(summary, "max_cluster_exposure", 0.25) * 100.0
     print("\n=======================================================")
-    print("🔗 CORRELATED ASSET CLUSTERS (Max 25% Exposure Cap)")
+    print(f"🔗 CORRELATED ASSET CLUSTERS (Max {cap_pct:.1f}% Exposure Cap, n <= {getattr(engine, 'max_assets_per_cluster', 4)})")
     print("=======================================================")
     alloc_map = {a.ticker: a for a in summary.allocations}
-    c_headers = ["Cluster ID", "Combined Target %", "Cap Limit", "Assets"]
+    details_map = getattr(summary, "cluster_details", {})
+    c_headers = ["Cluster ID", "Anchor Lead", "Assets", "Intra-Corr", "Combined Target %", "Cap Limit", "Status"]
     c_rows = []
     for c_id, members in sorted(summary.clusters.items()):
         c_weight = sum(alloc_map[m].target_weight for m in members if m in alloc_map)
+        det = details_map.get(c_id, {})
+        lead = det.get("anchor_lead", members[0] if members else "—")
+        lead_wt = alloc_map[lead].target_weight if lead in alloc_map else 0.0
+        lead_str = f"{lead} ({lead_wt:.2f}%)"
+        avg_c = det.get("avg_intra_corr")
+        corr_str = f"{avg_c:+.2f}" if (avg_c is not None and len(members) > 1) else ("— (single)" if len(members) == 1 else "—")
+        status_str = "✅ OK" if c_weight <= (cap_pct + 0.01) else "⚠️ CAPPED"
         c_rows.append([
             f"Cluster {c_id}",
-            f"{c_weight:.2f}%",
-            "25.00%",
+            lead_str,
             ", ".join(sorted(members)),
+            corr_str,
+            f"{c_weight:.2f}%",
+            f"{cap_pct:.2f}%",
+            status_str,
         ])
     print(format_table(c_headers, c_rows))
 

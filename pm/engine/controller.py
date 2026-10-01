@@ -68,15 +68,38 @@ class PortfolioManagerEngine:
             stale_warning_days=self.stale_warning_days,
         )
         self.csv_parser = BrokerCSVParser(self.downloads_dir)
-        self.market_data = MarketDataService(lookback_days=risk_cfg.get("history_lookback_days", 180))
-        self.cluster_engine = CorrelationClusterEngine(
-            cophenetic_threshold=risk_cfg.get("clustering_cophenetic_threshold", 0.5)
+        clustering_cfg = risk_cfg.get("clustering", {})
+        k_val = clustering_cfg.get("k", clustering_cfg.get("target_clusters", 10))
+        criterion = clustering_cfg.get("criterion", "maxclust")
+        method = clustering_cfg.get("method", "average")
+        concentration_guide = clustering_cfg.get("concentration_guide", "composite")
+        max_assets_per_cluster = risk_cfg.get("max_assets_per_cluster", 4)
+        distance_threshold = clustering_cfg.get("distance_threshold", 0.70)
+        legacy_cophenetic = risk_cfg.get("clustering_cophenetic_threshold")
+        lookback_days = clustering_cfg.get(
+            "history_lookback_days", risk_cfg.get("history_lookback_days", 180)
         )
+
+        self.market_data = MarketDataService(lookback_days=lookback_days)
+        self.cluster_engine = CorrelationClusterEngine(
+            k=k_val,
+            criterion=criterion,
+            method=method,
+            concentration_guide=concentration_guide,
+            max_assets_per_cluster=max_assets_per_cluster,
+            distance_threshold=distance_threshold,
+            cophenetic_threshold=legacy_cophenetic,
+        )
+        self.max_single_stock_exposure = risk_cfg.get(
+            "max_single_stock_exposure", risk_cfg.get("max_position_weight", 0.15)
+        )
+        self.max_cluster_exposure = risk_cfg.get("max_cluster_exposure", 0.25)
+        self.max_assets_per_cluster = max_assets_per_cluster
         self.enforce_cash_reserve = risk_cfg.get("enforce_cash_reserve_on_buys", True)
         self.optimizer = PortfolioConstraintOptimizer(
-            max_position_weight=risk_cfg.get("max_position_weight", 0.15),
+            max_position_weight=self.max_single_stock_exposure,
             min_cash_reserve=risk_cfg.get("min_cash_reserve", 0.15),
-            max_cluster_exposure=risk_cfg.get("max_cluster_exposure", 0.25),
+            max_cluster_exposure=self.max_cluster_exposure,
             multipliers=multipliers,
             market_cap_cfg=market_cap_cfg,
         )
@@ -304,11 +327,30 @@ class PortfolioManagerEngine:
         returns_df = self.market_data.fetch_historical_returns(sorted_universe, period="6mo")
         clusters = self.cluster_engine.cluster_assets(returns_df)
 
+        # Step 2b: Intra-Cluster Concentration Rationalization (n <= max_assets_per_cluster)
+        target_prices = {
+            t: parsed_signals[t].target_price for t in sorted_universe if t in parsed_signals
+        }
+        max_assets_n = getattr(self, "max_assets_per_cluster", 4)
+        rationalized_clusters, excluded_by_rationalization = self.cluster_engine.rationalize_clusters(
+            clusters=clusters,
+            returns_df=returns_df,
+            market_caps=market_caps,
+            signals=active_signals,
+            realtime_prices=realtime_prices,
+            target_prices=target_prices,
+            max_assets=max_assets_n,
+        )
+
+        effective_signals = dict(active_signals)
+        for ex in excluded_by_rationalization:
+            effective_signals[ex] = SignalType.AVOID
+
         # 5. Steps 3 & 4: Option 5 Market-Cap Base Weighting & Hard Constraints
         target_weights = self.optimizer.optimize_weights(
             tickers=sorted_universe,
-            signals=active_signals,
-            clusters=clusters,
+            signals=effective_signals,
+            clusters=rationalized_clusters,
             market_caps=market_caps,
         )
         diagnostics = dict(getattr(self.optimizer, "last_diagnostics", {}))
@@ -328,9 +370,17 @@ class PortfolioManagerEngine:
             current_holdings=portfolio_state.holdings,
             target_weights=target_weights,
             realtime_prices=realtime_prices,
-            signals=active_signals,
-            clusters=clusters,
+            signals=effective_signals,
+            clusters=rationalized_clusters,
         )
+
+        # Tag rationalized positions in reasons
+        for a in allocations:
+            if a.ticker in excluded_by_rationalization and a.action == "SELL":
+                if "AVOID" in a.reason:
+                    a.reason = "RATIONALIZED_CLUSTER_CAP"
+                else:
+                    a.reason = f"{a.reason} [RATIONALIZED_CLUSTER_CAP]"
 
         # 7. Step 6: Dry Powder Cash Reserve Guard (Enforce Hard min_cash_reserve)
         # Guarantees that total buy orders do not deplete cash below the target cash reserve,
@@ -466,6 +516,12 @@ class PortfolioManagerEngine:
 
         unreported_securities.sort(key=lambda x: (not x.in_portfolio, x.ticker))
 
+        cluster_details = self.cluster_engine.compute_cluster_stats(
+            clusters=rationalized_clusters,
+            corr_matrix=getattr(self.cluster_engine, "last_corr_matrix", None),
+            target_weights=target_weights,
+        )
+
         return ReconciliationSummary(
             total_portfolio_value=total_live_portfolio_value,
             current_cash=portfolio_state.cash_balance,
@@ -474,7 +530,7 @@ class PortfolioManagerEngine:
             total_buys_dollars=total_buys,
             total_sells_dollars=total_sells,
             allocations=allocations,
-            clusters=clusters,
+            clusters=rationalized_clusters,
             aging_signals=aging_signals,
             expired_signals=expired_signals,
             all_signals=all_signals,
@@ -492,4 +548,6 @@ class PortfolioManagerEngine:
             unused_equity_budget=float(diagnostics.get("unused_equity_budget", 0.0)),
             binding_constraints=list(diagnostics.get("binding_constraints", [])),
             expired_holding_policy=getattr(self, "expired_holding_policy", "neutral"),
+            max_cluster_exposure=getattr(self, "max_cluster_exposure", 0.25),
+            cluster_details=cluster_details,
         )

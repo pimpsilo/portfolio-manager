@@ -55,15 +55,19 @@ $$\text{Universe} = \text{Current Portfolio Holdings} \cup \{ \text{Non-Portfoli
 ### Step 2: Correlation Filtering & Clustering Engine (`pm/risk/clustering.py`)
 * Download 6 months of daily adjusted close prices for all universe tickers.
 * Compute daily percentage returns $R$ and correlation matrix $C = \text{Corr}(R)$.
-* Convert to angular distance metric:
-  $$D = \sqrt{\text{clip}(0.5 \times (1.0 - C), 0.0, 1.0)}$$
-* Execute hierarchical clustering using `scipy.cluster.hierarchy.linkage` (average or ward method on condensed distance matrix `squareform(D)`).
-* Form flat clusters using `fcluster(Z, t=0.5, criterion='distance')`.
-* Enforce a **maximum 25% exposure cap** per correlated cluster group.
+* Convert to Pearson correlation distance metric (aligned with `Correlation_Analyzer`):
+  $$D = \text{clip}(1.0 - C, 0.0, 2.0)$$
+* Execute hierarchical clustering using `scipy.cluster.hierarchy.linkage` with average linkage on condensed distance matrix `squareform(D)`.
+* Form flat clusters using `fcluster(Z, t=k, criterion='maxclust')` (default $k=10$, configurable via `clustering.k` in `config.yaml`).
+* **Cluster Rationalization ($n \le 4$ concentration):**
+  - Limit each cluster to at most $n \le 4$ high-conviction holdings (configurable via `max_assets_per_cluster`).
+  - Rank candidates using the **Composite Conviction Guide**: Market Cap Anchor Tier (Mega > Large > Mid) + 6-month Sharpe ratio + Analyst upside %.
+  - Excluded tickers in oversized clusters are routed to `SignalType.AVOID` with trade rationale `RATIONALIZED_CLUSTER_CAP`, triggering graceful full liquidation.
+* Enforce a **maximum cluster exposure cap** (default 25%, configurable via `max_cluster_exposure`).
 
 ### Step 3 & 4: Base Weighting & Hard Constraints Optimizer (`pm/risk/constraints.py`)
 * **Option 5 Market-Cap / Maturity Anchoring:**
-  - **Mega-Cap ($200B+)**: 3.0x base anchor multiplier (`AAPL`, `MSFT`, `NVDA`, `AMZN`, `GOOG`, `META`, `AMD`, `NFLX`, etc.)
+  - **Mega-Cap ($200B+)**: 3.0x base anchor multiplier (`AAPL`, `MSFT`, `NVDA`, `AMZN`, `GOOG`, `META`, `AMD`, etc.)
   - **Large-Cap ($50B - $200B)**: 1.8x base multiplier (`SPGI`, `MCO`, `INTU`, `BKNG`, `UBER`, `PDD`, `MELI`, etc.)
   - **Mid/Emerging (<$50B)**: 1.0x base multiplier (`HIG`, `EG`, `WDC`, `ALAB`, `RDDT`, `DUOL`, etc.)
 * **Signal Multipliers (Modulating Base Anchor):**
@@ -73,9 +77,9 @@ $$\text{Universe} = \text{Current Portfolio Holdings} \cup \{ \text{Non-Portfoli
   - `AVOID`: 0.0x
   - $\text{Raw Weight}_i = \text{CapMultiplier}_i \times \text{SignalMultiplier}_i$
 * **Hard Portfolio Limits:**
-  - Maximum single position size: **$\le 15\%$** of total portfolio.
+  - Maximum single position size: **$\le 15\%$** (configurable via `max_single_stock_exposure` / `max_position_weight`).
   - Minimum cash reserve floor: **$\ge 10\%$** of total portfolio ($\text{Equity Budget} \le 90\%$).
-  - Maximum cluster exposure: **$\le 25\%$** cumulative per correlated cluster.
+  - Maximum cluster exposure: **$\le 25\%$** cumulative per correlated cluster (configurable via `max_cluster_exposure`).
 * **Iterative Proportional Re-normalization:**
   - Assets with `AVOID` are locked at $0.0\%$.
   - Excess weight from single position caps ($> 15\%$) or cluster caps ($> 25\%$) is trimmed and iteratively redistributed to uncapped, non-avoid assets.
@@ -125,12 +129,16 @@ Generate a structured Markdown document and write it to the Obsidian vault as:
    | **[META](../01_agent_reports/META/META_20260905_113036/complete_report.md)**<br><span style="font-size: 8pt; opacity: 0.7;">2026-09-05</span> | 30 | $610.68 | 2.73% | $10,047.37 | $-8,273.03 | **SELL** 🔴 | **14** | ... |
    | **[ADBE](../01_agent_reports/ADBE/ADBE_20260905_105416/complete_report.md)**<br><span style="font-size: 8pt; opacity: 0.7;">2026-09-05</span> | 0 | $285.75 | 2.73% | $10,047.37 | $+10,047.37 | **BUY** 🟢 | **35** | ... |
    ```
-3. **Aging & Approaching Stale Reports Table:**
-   Links ticker to agent report (`**[TICKER](relpath)**`), with adjacent dedicated columns for Report Date, Report Age, and Days Left.
-4. **Full Portfolio Rebalance & Drift Ledger:**
-   Complete ledger of all assets including `HOLD 🟡` positions, with linked tickers and ~8pt report dates.
-5. **Correlated Clusters Exposure Table:**
-   Cluster ID, Member Assets (individual Markdown report links, comma-separated), Combined Target Weight %, Cap Limit (25.00%), and Status (`✅ OK`).
+3. **Reports Summary (`## ⏳ 2. Reports Summary`):**
+   Collapsible sub-tables including:
+   - Aging / Stale Reports Summary (links ticker to agent report, Report Date, Age, and Days Left)
+   - Non-Portfolio Securities with Active Agent Reports & Status
+   - Securities without Active Agent Reports
+   - All Securities with Agent Reports (A–Z directory with ratings, price targets, and core guidance)
+4. **Portfolio (`## 📊 3.Portfolio`):**
+   Collapsible sub-tables including:
+   - Full Portfolio Rebalance & Drift Ledger (all assets including `HOLD 🟡` positions, with linked tickers and ~8pt report dates)
+   - Correlated Asset Clusters & Exposure (Cluster ID, Member Assets, Combined Target Weight %, Cap Limit 25%, Status)
 
 ---
 

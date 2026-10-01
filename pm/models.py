@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class SignalType(str, Enum):
@@ -126,6 +126,8 @@ class ReconciliationSummary:
     unused_equity_budget: float = 0.0
     binding_constraints: List[str] = field(default_factory=list)
     expired_holding_policy: str = "neutral"
+    max_cluster_exposure: float = 0.25
+    cluster_details: Dict[int, Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass

@@ -113,11 +113,17 @@ class MarkdownTradeReporter:
         return str(signal_val.value if hasattr(signal_val, "value") else signal_val)
 
     @staticmethod
-    def _collapsible_section(heading: str, summary_label: str, body_lines: List[str]) -> List[str]:
+    def _collapsible_section(
+        heading: str,
+        summary_label: str,
+        body_lines: List[str],
+        start_open: bool = False,
+    ) -> List[str]:
         lines: List[str] = []
         lines.append(heading)
         lines.append("")
-        lines.append("<details>")
+        details_tag = "<details open>" if start_open else "<details>"
+        lines.append(details_tag)
         lines.append(f"<summary>{summary_label}</summary>")
         lines.append("")
         lines.extend(body_lines)
@@ -128,13 +134,13 @@ class MarkdownTradeReporter:
 
     def _snapshot_header(self, summary: ReconciliationSummary) -> str:
         if summary.download_time and summary.source_file:
-            return f"## ⏱️ Snapshot: {summary.download_time} (Source: `{summary.source_file}`)"
+            return f"# ⏱️ Snapshot: {summary.download_time} (Source: `{summary.source_file}`)"
         elif summary.download_time:
-            return f"## ⏱️ Snapshot: {summary.download_time}"
+            return f"# ⏱️ Snapshot: {summary.download_time}"
         elif summary.source_file:
-            return f"## ⏱️ Snapshot: (Source: `{summary.source_file}`)"
+            return f"# ⏱️ Snapshot: (Source: `{summary.source_file}`)"
         else:
-            return "## ⏱️ Snapshot: Portfolio Reconciliation"
+            return "# ⏱️ Snapshot: Portfolio Reconciliation"
 
     def generate_snapshot_markdown(self, summary: ReconciliationSummary) -> str:
         lines: List[str] = []
@@ -166,7 +172,7 @@ class MarkdownTradeReporter:
         coverage_total = len(summary.all_signals) + missing_count
         coverage_current = len(summary.all_signals) - len(summary.expired_signals)
         decision_status = "REVIEW REQUIRED" if summary.safe_mode or summary.data_quality_warnings or summary.unreported_securities else "READY FOR REVIEW"
-        lines.append("### Decision & Data Quality")
+        lines.append("## Decision & Data Quality")
         lines.append("")
         lines.append(
             f"> **Status**: **{decision_status}** | **Orders**: {sell_count} sells / {buy_count} buys | "
@@ -224,19 +230,22 @@ class MarkdownTradeReporter:
                 )
             lines.append("")
 
-        # 2. Aging / Stale Reports Summary
-        lines.append("## ⏳ 2. Aging / Stale Reports Summary")
+        # 2. Reports Summary
+        lines.append("## ⏳ 2. Reports Summary")
         lines.append("")
-        lines.append(f"> Reports older than **{summary.max_age_days} days** are considered stale. The items below require a fresh `tradingagents` analysis run before their signals expire.")
-        lines.append("")
+
+        # 2.1 Aging / Stale Reports Summary
+        aging_lines: List[str] = []
+        aging_lines.append(f"> Reports older than **{summary.max_age_days} days** are considered stale. The items below require a fresh `tradingagents` analysis run before their signals expire.")
+        aging_lines.append("")
 
         all_aging = summary.aging_signals + summary.expired_signals
         if not all_aging:
-            lines.append(f"*All active reports are fresh (less than {summary.max_age_days - 4} days old). Zero reports approaching expiration.*")
-            lines.append("")
+            aging_lines.append(f"*All active reports are fresh (less than {summary.max_age_days - 4} days old). Zero reports approaching expiration.*")
+            aging_lines.append("")
         else:
-            lines.append("| Ticker | Report Date | Report Age | Days Left | Current Rating | In Portfolio? | Urgency & Action |")
-            lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :--- |")
+            aging_lines.append("| Ticker | Report Date | Report Age | Days Left | Current Rating | In Portfolio? | Urgency & Action |")
+            aging_lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :--- |")
 
             for s in all_aging:
                 in_port_str = "**YES** ✅" if s.in_portfolio else "No (Watchlist)"
@@ -248,40 +257,17 @@ class MarkdownTradeReporter:
                     status_badge = f"🟡 **WARNING ({s.days_remaining}d left)** — Queue this week"
 
                 ticker_cell = self._report_md_link(s.ticker, s.source_path, s.date, bold=True, include_date=False)
-                lines.append(
+                aging_lines.append(
                     f"| {ticker_cell} | {s.date.isoformat()} | {s.age_days} days | {s.days_remaining} days | {s.signal.value} | {in_port_str} | {status_badge} |"
                 )
-            lines.append("")
-
-        # 3. Full Portfolio Rebalance & Drift Ledger
-        ledger_lines: List[str] = []
-        ledger_lines.append("| Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares | Drift / Protection Rationale |")
-        ledger_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
-
-        for a in summary.allocations:
-            curr_shares_str = f"{a.current_shares:g}"
-            order_shares_str = f"{a.order_shares:g}" if a.action != "HOLD" else "—"
-            action_display = a.action
-            if a.action == "SELL":
-                action_display = "**SELL** 🔴"
-            elif a.action == "BUY":
-                action_display = "**BUY** 🟢"
-            else:
-                action_display = "HOLD 🟡"
-
-            ticker_cell = self._report_md_link(a.ticker, a.report_path, a.report_date, bold=True, include_date=True)
-            ledger_lines.append(
-                f"| {ticker_cell} | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_display} | {order_shares_str} | {a.reason} |"
-            )
-
-        ledger_lines.append("")
+            aging_lines.append("")
         lines.extend(self._collapsible_section(
-            "## 📊 3. Full Portfolio Rebalance & Drift Ledger",
-            "View full rebalance ledger",
-            ledger_lines,
+            "### Aging / Stale Reports Summary",
+            "View aging and stale report detail",
+            aging_lines,
         ))
 
-        # 4. Non-Portfolio Securities with Active Agent Reports & Status
+        # 2.2 Non-Portfolio Securities with Active Agent Reports & Status
         non_port_lines: List[str] = []
 
         # Gather unheld signals
@@ -335,12 +321,12 @@ class MarkdownTradeReporter:
                 )
             non_port_lines.append("")
         lines.extend(self._collapsible_section(
-            "## 🌐 4. Non-Portfolio Securities with Active Agent Reports & Status",
+            "### Non-Portfolio Securities with Active Agent Reports & Status",
             "View watchlist detail",
             non_port_lines,
         ))
 
-        # 5. Securities without Active Agent Reports
+        # 2.3 Securities without Active Agent Reports
         unreported_lines: List[str] = []
         unreported_lines.append("> Tracked securities of interest (portfolio holdings and `stocks.csv` watchlist) that currently lack an active `tradingagents` research report. Run `python main.py --run-agents --tickers <TICKER>` to generate coverage.")
         unreported_lines.append("")
@@ -379,12 +365,12 @@ class MarkdownTradeReporter:
                 )
             unreported_lines.append("")
         lines.extend(self._collapsible_section(
-            "## ⚠️ 5. Securities without Active Agent Reports",
+            "### Securities without Active Agent Reports",
             "View missing-report coverage",
             unreported_lines,
         ))
 
-        # 6. All Securities with Agent Reports (Alphabetical by Ticker)
+        # 2.4 All Securities with Agent Reports (Alphabetical by Ticker)
         all_sigs_lines: List[str] = []
         all_sigs_lines.append("> Complete directory of all securities with agent research reports on file, including analyst verdicts, price targets, core guidance summaries, and current portfolio participation.")
         all_sigs_lines.append("")
@@ -439,15 +425,51 @@ class MarkdownTradeReporter:
                 )
             all_sigs_lines.append("")
         lines.extend(self._collapsible_section(
-            "## 📋 6. All Securities with Agent Reports",
+            "### All Securities with Agent Reports",
             "View all research coverage",
             all_sigs_lines,
         ))
 
-        # 7. Cluster Exposures
+        # 3. Portfolio
+        lines.append("## 📊 3.Portfolio")
+        lines.append("")
+
+        # 3.1 Full Portfolio Rebalance & Drift Ledger
+        ledger_lines: List[str] = []
+        ledger_lines.append("| Ticker | Current Shares | Current Price (yfinance) | Target Weight | Target Value | Delta ($) | Action | Order Shares | Drift / Protection Rationale |")
+        ledger_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+
+        for a in summary.allocations:
+            curr_shares_str = f"{a.current_shares:g}"
+            order_shares_str = f"{a.order_shares:g}" if a.action != "HOLD" else "—"
+            action_display = a.action
+            if a.action == "SELL":
+                action_display = "**SELL** 🔴"
+            elif a.action == "BUY":
+                action_display = "**BUY** 🟢"
+            else:
+                action_display = "HOLD 🟡"
+
+            ticker_cell = self._report_md_link(a.ticker, a.report_path, a.report_date, bold=True, include_date=True)
+            ledger_lines.append(
+                f"| {ticker_cell} | {curr_shares_str} | ${a.realtime_price:,.2f} | {a.target_weight:.2f}% | ${a.target_value:,.2f} | ${a.dollar_delta:+,.2f} | {action_display} | {order_shares_str} | {a.reason} |"
+            )
+
+        ledger_lines.append("")
+        lines.extend(self._collapsible_section(
+            "### Full Portfolio Rebalance & Drift Ledger",
+            "View full rebalance ledger",
+            ledger_lines,
+        ))
+
+        # 3.2 Correlated Asset Clusters & Exposure
         cluster_lines: List[str] = []
-        cluster_lines.append("| Cluster ID | Group Assets | Combined Target Weight | Cap Limit | Status |")
-        cluster_lines.append("| :---: | :--- | :---: | :---: | :---: |")
+        cluster_lines.append("| Cluster ID | Anchor Lead | Group Assets | Intra-Cluster Corr | Combined Target Weight | Cap Limit | Status |")
+        cluster_lines.append("| :---: | :--- | :--- | :---: | :---: | :---: | :---: |")
+
+        cap_limit = getattr(summary, "max_cluster_exposure", 0.25) * 100.0
+        cap_str = f"{cap_limit:.2f}%"
+        cluster_details = getattr(summary, "cluster_details", {})
 
         for c_id, members in sorted(summary.clusters.items()):
             c_weight = sum(alloc_by_ticker[m].target_weight for m in members if m in alloc_by_ticker)
@@ -461,12 +483,38 @@ class MarkdownTradeReporter:
                 )
                 for m in sorted(members)
             )
-            status = "✅ OK" if c_weight <= 25.01 else "⚠️ CAPPED"
-            cluster_lines.append(f"| {c_id} | {assets_str} | {c_weight:.2f}% | 25.00% | {status} |")
+            detail = cluster_details.get(c_id, {})
+            anchor_lead = detail.get("anchor_lead", "")
+            if anchor_lead and anchor_lead in alloc_by_ticker:
+                lead_wt = alloc_by_ticker[anchor_lead].target_weight
+                lead_str = self._report_md_link(
+                    anchor_lead,
+                    alloc_by_ticker[anchor_lead].report_path,
+                    alloc_by_ticker[anchor_lead].report_date,
+                    bold=True,
+                    include_date=False,
+                ) + f" ({lead_wt:.2f}%)"
+            elif members:
+                first_m = sorted(members)[0]
+                first_wt = alloc_by_ticker[first_m].target_weight if first_m in alloc_by_ticker else 0.0
+                lead_str = f"**{first_m}** ({first_wt:.2f}%)"
+            else:
+                lead_str = "—"
+
+            avg_corr = detail.get("avg_intra_corr")
+            if avg_corr is not None and len(members) > 1:
+                corr_str = f"{avg_corr:+.2f}"
+            elif len(members) == 1:
+                corr_str = "— (single)"
+            else:
+                corr_str = "—"
+
+            status = "✅ OK" if c_weight <= (cap_limit + 0.01) else "⚠️ CAPPED"
+            cluster_lines.append(f"| {c_id} | {lead_str} | {assets_str} | {corr_str} | {c_weight:.2f}% | {cap_str} | {status} |")
 
         cluster_lines.append("")
         lines.extend(self._collapsible_section(
-            "## 🔗 Correlated Asset Clusters & Exposure",
+            "### Correlated Asset Clusters & Exposure",
             "View cluster exposure",
             cluster_lines,
         ))
@@ -495,7 +543,7 @@ class MarkdownTradeReporter:
             return target_path
 
         existing_content = target_path.read_text(encoding="utf-8")
-        if not existing_content.strip() or "## ⏱️ Snapshot:" not in existing_content:
+        if not existing_content.strip() or ("## ⏱️ Snapshot:" not in existing_content and "# ⏱️ Snapshot:" not in existing_content):
             content = self.generate_report_markdown(summary)
             target_path.write_text(content, encoding="utf-8")
             self._update_daily_pointer(summary.execution_date)
@@ -511,7 +559,7 @@ class MarkdownTradeReporter:
             replaced = False
             for i, block in enumerate(blocks):
                 if source_id in block:
-                    if i == 0 and block.startswith("# "):
+                    if i == 0 and block.startswith("# Trade Execution Orders"):
                         first_line = block.splitlines()[0]
                         new_blocks.append(f"{first_line}\n\n{snapshot_body}")
                     else:

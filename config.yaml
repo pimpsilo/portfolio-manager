@@ -24,12 +24,21 @@ equivalent_symbols:
   - ["BRK.A", "BRK.B"]
 
 risk:
-  max_position_weight: 0.15      # Max 15% single position
-  min_cash_reserve: 0.15         # Min 15% cash reserve floor ("Dry Powder")
+  max_single_stock_exposure: 0.15    # Max 15% single position (alias: max_position_weight)
+  max_position_weight: 0.15          # Backward-compatibility alias
+  min_cash_reserve: 0.15             # Min 15% cash reserve floor ("Dry Powder")
   enforce_cash_reserve_on_buys: true # Never allow total buys to draw down cash below min_cash_reserve
-  max_cluster_exposure: 0.25     # Max 25% exposure per correlated cluster
-  clustering_cophenetic_threshold: 0.5
-  history_lookback_days: 180
+  max_cluster_exposure: 0.25         # Max 25% exposure per correlated cluster
+  max_assets_per_cluster: 4          # Max 4 stocks per cluster (n <= 4 rationalization)
+
+  # Correlation Clustering Engine (aligned with Correlation_Analyzer)
+  clustering:
+    k: 10                            # Target number of macro clusters (alias: target_clusters)
+    method: "average"                # Hierarchical linkage: 'average', 'complete', 'single'
+    criterion: "maxclust"            # 'maxclust' (target k clusters) or 'distance'
+    concentration_guide: "composite" # 'composite' (Cap Tier + Sharpe + Upside) | 'sharpe' | 'upside' | 'market_cap'
+    distance_threshold: 0.70         # Cutoff (1 - r) when criterion='distance' (0.70 => r >= 0.30)
+    history_lookback_days: 180       # Lookback period for daily returns (days)
 
 # Option 5: Market-Cap / Maturity Anchor with Active Tilts
 market_cap_weighting:

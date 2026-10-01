@@ -124,21 +124,23 @@ python main.py --execute --csv ~/Downloads/Portfolio_Positions_Sep-11-2026.csv
 
 ### D. Intra-Day Snapshots & Overwriting
 When multiple extracts/downloads occur on the same date (e.g. `Portfolio_Positions_Sep-11-2026 (1).csv`, `(2).csv`, `(3).csv`), running `--execute` automatically appends intra-day snapshots to the existing daily report:
-- **Intra-Day Snapshots (Default)**: Each run appends a timestamped snapshot header (`## ⏱️ Snapshot: {download_time} (Source: {source_file})`) separated by a `---` horizontal rule. Re-running the same CSV updates that snapshot in-place without duplicate bloat.
+- **Intra-Day Snapshots (Default)**: Each run appends a timestamped snapshot header (`# ⏱️ Snapshot: {download_time} (Source: {source_file})`) separated by a `---` horizontal rule. Re-running the same CSV updates that snapshot in-place without duplicate bloat.
 - **Force Overwrite (`--overwrite`)**: To overwrite the entire daily report from scratch with only the latest run:
   ```bash
   python main.py --execute --overwrite
   ```
 
 ### The Generated Report Sections
-When written, `Trade_Orders_YYYY-MM-DD.md` contains 6 comprehensive sections:
+When written, `Trade_Orders_YYYY-MM-DD.md` contains 3 main sections organized with clean collapsible sub-tables:
 1. **🎯 1. Immediate / Daily Actions**: Actionable rebalance orders with **Sell orders first (alphabetical by ticker)** followed by **Buy orders (alphabetical by ticker)**.
-2. **⏳ 2. Aging / Stale Reports Summary**: Status table of all reports approaching stale or expired (>14 days). Filtered strictly to the control universe (`stocks.csv` + held positions; extraneous reports on disk are ignored).
-3. **📊 3. Full Portfolio Rebalance & Drift Ledger**: Current shares, live quotes, target weights, dollar deltas, and drift/protection rationales.
-4. **🌐 4. Non-Portfolio Securities with Active Agent Reports & Status**: All unheld watchlist securities with active reports, listing ratings, price targets, days left, and candidate status.
-5. **⚠️ 5. Securities without Active Agent Reports**: All securities of interest (portfolio holdings + `stocks.csv` watchlist) that lack a current active research report (missing or expired >14d).
-6. **📋 6. All Securities with Agent Reports**: Complete alphabetical directory (A–Z) of all securities with reports on file, including analyst verdicts, price targets, portfolio participation (`Held` vs `Watchlist`), and one-sentence core guidance summaries.
-7. **🔗 Correlated Asset Clusters & Exposure**: Hierarchical correlation groups capped at max 25% exposure.
+2. **⏳ 2. Reports Summary**: Comprehensive research coverage grouped into collapsible sub-sections:
+   - **Aging / Stale Reports Summary**: Status table of all reports approaching stale or expired (>14 days), filtered to the control universe (`stocks.csv` + held positions).
+   - **Non-Portfolio Securities with Active Agent Reports & Status**: All unheld watchlist securities with active reports, listing ratings, price targets, days left, and candidate status.
+   - **Securities without Active Agent Reports**: All securities of interest (portfolio holdings + `stocks.csv` watchlist) that lack a current active research report (missing or expired >14d).
+   - **All Securities with Agent Reports**: Complete alphabetical directory (A–Z) of all securities with reports on file, including analyst verdicts, price targets, portfolio participation (`Held` vs `Watchlist`), and one-sentence core guidance summaries.
+3. **📊 3.Portfolio**: Portfolio reconciliation and risk controls grouped into collapsible sub-sections:
+   - **Full Portfolio Rebalance & Drift Ledger**: Current shares, live quotes, target weights, dollar deltas, and drift/protection rationales.
+   - **Correlated Asset Clusters & Exposure**: Hierarchical correlation groups capped at max 25% exposure.
 
 
 ---
