@@ -71,6 +71,9 @@ rebalance:
     rebalance_step_factor: 0.50   # 50% tranche for rebalance buys and trims
     max_trade_dollar_cap: 6000.0  # Max dollar trade per order ($6,000 ceiling guard)
     avoid_step_factor: 1.00       # 100% immediate liquidation on AVOID signals
+    cooldown_days: 7              # Min days between transactions on the same security
+
+  min_transaction_interval_days: 7 # Minimum 7 days between transactions per security (enforces weekly DCA/divestment)
 
 watcher:
   poll_interval_seconds: 3       # Check Downloads folder every 3 seconds

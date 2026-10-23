@@ -231,10 +231,12 @@ The PM engine enforces deterministic mathematical rules and risk constraints to 
    - Enforces a minimum 15% cash reserve (`risk.min_cash_reserve: 0.15`, `enforce_cash_reserve_on_buys: true`).
    - Buy order sizing is strictly constrained so that total allocated capital never draws cash below the 15% reserve floor.
 
-3. **Staged Transaction Stepping & Dollar Caps**:
+3. **Staged Transaction Stepping, Dollar Caps & 7-Day Cooldown**:
+   - **7-Day Transaction Cadence**: Enforces a strict minimum 7-day interval between transactions on any given security (`rebalance.min_transaction_interval_days: 7`). Accumulating buys are paced as weekly Dollar-Cost Averaging (DCA), trims are divested gradually over weeks, and rapid whipsaws (buying and selling the same security in the same week) are strictly prevented.
    - **50% Tranches**: Starter entries and rebalance adjustments execute in staged 50% tranches (`starter_step_factor: 0.50`, `rebalance_step_factor: 0.50`) to avoid chasing price spikes.
    - **$6,000 Trade Cap**: Standard orders are capped at a maximum of $6,000 per order (`max_trade_dollar_cap: 6000.0`).
-   - **Immediate Liquidation**: `AVOID` signals bypass stepping and execute 100% full liquidation (`avoid_step_factor: 1.00`).
+   - **Immediate Liquidation**: When outside the 7-day cooldown window, `AVOID` signals execute 100% full liquidation (`avoid_step_factor: 1.00`).
+
 
 4. **Asymmetric "Let Winners Run" Drift Policy**:
    - Standard 20% relative drift trigger for trims.

@@ -13,6 +13,7 @@ from pm.market_data.pricing import MarketDataService
 from pm.models import AllocationResult, ParsedSignal, ReconciliationSummary, SignalType, UnreportedSecurity
 from pm.risk.clustering import CorrelationClusterEngine
 from pm.risk.constraints import PortfolioConstraintOptimizer
+from pm.engine.history import TransactionHistoryTracker
 from pm.engine.reconciler import PortfolioReconciler
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,16 @@ class PortfolioManagerEngine:
         self.excluded_tickers = set(signals_cfg.get("excluded_tickers", []))
 
         stepping_cfg = rebalance_cfg.get("stepping", {})
+        min_tx_interval = rebalance_cfg.get(
+            "min_transaction_interval_days",
+            stepping_cfg.get("cooldown_days", 7),
+        )
+        self.min_transaction_interval_days = int(min_tx_interval)
+        self.history_tracker = TransactionHistoryTracker(
+            obsidian_vault_dir=self.obsidian_vault_dir,
+            downloads_dir=self.downloads_dir,
+            equivalent_symbols=self.equivalent_symbols,
+        )
         self.reconciler = PortfolioReconciler(
             relative_threshold=rebalance_cfg.get("relative_threshold", 0.20),
             hold_drift_tolerance=rebalance_cfg.get("hold_drift_tolerance", 1.00),
@@ -120,6 +131,7 @@ class PortfolioManagerEngine:
             rebalance_step_factor=stepping_cfg.get("rebalance_step_factor", 0.50),
             max_trade_dollar_cap=stepping_cfg.get("max_trade_dollar_cap", 6000.0),
             avoid_step_factor=stepping_cfg.get("avoid_step_factor", 1.00),
+            min_transaction_interval_days=self.min_transaction_interval_days,
         )
 
     def _load_allowed_candidates(self) -> Set[str]:
@@ -364,6 +376,17 @@ class PortfolioManagerEngine:
             max(0.0, 1.0 - self.optimizer.min_cash_reserve - sum(target_weights.values())), 6
         )
 
+        # Fetch transaction history to enforce weekly DCA / divesting cooldown
+        tracker = getattr(self, "history_tracker", None)
+        if tracker is None:
+            tracker = TransactionHistoryTracker(
+                obsidian_vault_dir=getattr(self, "obsidian_vault_dir", None),
+                downloads_dir=getattr(self, "downloads_dir", None),
+                equivalent_symbols=getattr(self, "equivalent_symbols", None),
+            )
+            self.history_tracker = tracker
+        last_transactions = tracker.get_last_transactions(as_of_date=as_of_date)
+
         # 6. Step 5: Reconciliation & Order Sizing
         allocations = self.reconciler.reconcile(
             total_portfolio_value=total_live_portfolio_value,
@@ -372,6 +395,8 @@ class PortfolioManagerEngine:
             realtime_prices=realtime_prices,
             signals=effective_signals,
             clusters=rationalized_clusters,
+            last_transactions=last_transactions,
+            as_of_date=as_of_date,
         )
 
         # Tag rationalized positions in reasons

@@ -1,5 +1,6 @@
 import logging
-from typing import Dict, List, Optional
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Union
 from pm.models import AllocationResult, Holding, SignalType
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class PortfolioReconciler:
         rebalance_step_factor: float = 0.50,
         max_trade_dollar_cap: float = 6000.0,
         avoid_step_factor: float = 1.00,
+        min_transaction_interval_days: int = 7,
     ):
         self.relative_threshold = relative_threshold
         self.hold_drift_tolerance = hold_drift_tolerance
@@ -34,6 +36,7 @@ class PortfolioReconciler:
         self.rebalance_step_factor = rebalance_step_factor
         self.max_trade_dollar_cap = max_trade_dollar_cap
         self.avoid_step_factor = avoid_step_factor
+        self.min_transaction_interval_days = min_transaction_interval_days
 
     def reconcile(
         self,
@@ -43,6 +46,8 @@ class PortfolioReconciler:
         realtime_prices: Dict[str, float],
         signals: Dict[str, SignalType],
         clusters: Dict[int, List[str]],
+        last_transactions: Optional[Dict[str, Any]] = None,
+        as_of_date: Optional[date] = None,
     ) -> List[AllocationResult]:
         """
         Calculates trade orders and allocation metrics for all assets in the universe.
@@ -197,6 +202,32 @@ class PortfolioReconciler:
                 action = "HOLD"
                 order_shares = 0.0
                 reason = "SUB_SHARE_MINIMUM"
+
+            # Cooldown check: enforce minimum transaction interval between trades per security
+            if (
+                action in ("BUY", "SELL")
+                and order_shares > 0
+                and self.min_transaction_interval_days > 0
+                and last_transactions
+                and as_of_date
+            ):
+                tx_info = last_transactions.get(ticker)
+                if tx_info:
+                    tx_date = tx_info.trade_date if hasattr(tx_info, "trade_date") else tx_info
+                    if isinstance(tx_date, datetime):
+                        tx_date = tx_date.date()
+                    if isinstance(tx_date, date):
+                        days_since = (as_of_date - tx_date).days
+                        if 0 <= days_since < self.min_transaction_interval_days:
+                            days_remaining = self.min_transaction_interval_days - days_since
+                            action = "HOLD"
+                            order_shares = 0.0
+                            reason = (
+                                f"COOLDOWN_ACTIVE (Last trade {tx_date.isoformat()}, "
+                                f"{days_since}d ago < {self.min_transaction_interval_days}d; "
+                                f"{days_remaining}d remaining)"
+                            )
+
 
             drift_pct = (target_weight - current_weight) * 100.0
 

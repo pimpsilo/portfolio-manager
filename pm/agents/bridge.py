@@ -20,6 +20,49 @@ try:
 except ImportError:
     pass
 
+# Harmonize API keys: Google SDK emits a warning if both GOOGLE_API_KEY and GEMINI_API_KEY are present
+if "GOOGLE_API_KEY" in os.environ and "GEMINI_API_KEY" in os.environ:
+    if os.environ["GOOGLE_API_KEY"]:
+        os.environ.pop("GEMINI_API_KEY", None)
+
+# Expand google.genai transient exceptions to cover server disconnects and protocol errors
+try:
+    import httpx
+    try:
+        import httpcore
+        _httpcore_errs = (
+            httpcore.RemoteProtocolError,
+            httpcore.ReadError,
+            httpcore.WriteError,
+            httpcore.NetworkError,
+            httpcore.TimeoutException,
+        )
+    except ImportError:
+        _httpcore_errs = ()
+    from google.genai import _api_client
+    _extra_transient = (
+        httpx.RemoteProtocolError,
+        httpx.ReadError,
+        httpx.WriteError,
+        httpx.TransportError,
+        httpx.NetworkError,
+        ConnectionResetError,
+        BrokenPipeError,
+    ) + _httpcore_errs
+    _api_client._HTTPX_TRANSIENT_EXC = tuple(set(_api_client._HTTPX_TRANSIENT_EXC + _extra_transient))
+except Exception:
+    pass
+
+# Suppress known noisy SDK warnings
+try:
+    from google.genai.models import Models
+    Models._logged_afc_warning = True
+except Exception:
+    pass
+
+import warnings
+warnings.filterwarnings("ignore", message=".*is not a valid FinishReason.*")
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,10 +145,12 @@ class TradingAgentsBridge:
         trade_date: Optional[str] = None,
         asset_type: str = "stock",
         analysts: Optional[List[str]] = None,
+        max_attempts: int = 2,
     ) -> AgentEvaluationResult:
         """
         Runs the TradingAgentsGraph pipeline for a single ticker and writes
         the report tree directly to the Obsidian vault reports directory.
+        Includes automatic retry for transient network and protocol errors.
         """
         start_time = time.time()
         if trade_date is None:
@@ -117,50 +162,64 @@ class TradingAgentsBridge:
         ticker_clean = ticker.strip().upper()
         logger.info(f"🚀 Starting TradingAgents research for {ticker_clean} (trade_date={trade_date}, asset_type={asset_type}, analysts={analysts})...")
 
-        try:
-            from tradingagents.graph.trading_graph import TradingAgentsGraph
+        for attempt in range(1, max_attempts + 1):
+            try:
+                from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-            agent_config = self._build_agent_config()
-            graph = TradingAgentsGraph(
-                selected_analysts=analysts,
-                debug=self.debug,
-                config=agent_config,
-            )
+                agent_config = self._build_agent_config()
+                graph = TradingAgentsGraph(
+                    selected_analysts=analysts,
+                    debug=self.debug,
+                    config=agent_config,
+                )
 
-            final_state, signal = graph.propagate(
-                company_name=ticker_clean,
-                trade_date=trade_date,
-                asset_type=asset_type,
-            )
+                final_state, signal = graph.propagate(
+                    company_name=ticker_clean,
+                    trade_date=trade_date,
+                    asset_type=asset_type,
+                )
 
-            # Save the full report tree into reports_dir/<TICKER>/<TICKER>_<YYYYMMDD>_<HHMMSS>/
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            target_save_path = Path(self.reports_dir) / ticker_clean / f"{ticker_clean}_{stamp}"
-            report_path = graph.save_reports(final_state, ticker_clean, save_path=target_save_path)
-            duration = time.time() - start_time
+                # Save the full report tree into reports_dir/<TICKER>/<TICKER>_<YYYYMMDD>_<HHMMSS>/
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                target_save_path = Path(self.reports_dir) / ticker_clean / f"{ticker_clean}_{stamp}"
+                report_path = graph.save_reports(final_state, ticker_clean, save_path=target_save_path)
+                duration = time.time() - start_time
 
-            signal_val = str(signal.value) if hasattr(signal, "value") else str(signal)
-            logger.info(f"✅ Finished research for {ticker_clean}: Signal={signal_val} in {duration:.1f}s")
+                signal_val = str(signal.value) if hasattr(signal, "value") else str(signal)
+                logger.info(f"✅ Finished research for {ticker_clean}: Signal={signal_val} in {duration:.1f}s")
 
-            return AgentEvaluationResult(
-                ticker=ticker_clean,
-                signal=signal_val,
-                report_path=str(report_path),
-                success=True,
-                duration_seconds=duration,
-            )
+                return AgentEvaluationResult(
+                    ticker=ticker_clean,
+                    signal=signal_val,
+                    report_path=str(report_path),
+                    success=True,
+                    duration_seconds=duration,
+                )
 
-        except Exception as e:
-            duration = time.time() - start_time
-            logger.exception(f"❌ Failed to run research pipeline for {ticker_clean}: {e}")
-            return AgentEvaluationResult(
-                ticker=ticker_clean,
-                signal=None,
-                report_path=None,
-                success=False,
-                error_message=str(e),
-                duration_seconds=duration,
-            )
+            except Exception as e:
+                err_str = str(e)
+                duration = time.time() - start_time
+                is_transient = any(sub in err_str.lower() for sub in (
+                    "disconnected", "protocolerror", "timeout", "connection",
+                    "reset", "503", "502", "504", "429", "rate limit"
+                ))
+
+                if attempt < max_attempts and is_transient:
+                    logger.warning(
+                        f"⚠️ Transient error evaluating {ticker_clean} (attempt {attempt}/{max_attempts}): {e}. Retrying in 10s..."
+                    )
+                    time.sleep(10)
+                    continue
+
+                logger.exception(f"❌ Failed to run research pipeline for {ticker_clean}: {e}")
+                return AgentEvaluationResult(
+                    ticker=ticker_clean,
+                    signal=None,
+                    report_path=None,
+                    success=False,
+                    error_message=err_str,
+                    duration_seconds=duration,
+                )
 
     def run_batch(
         self,
@@ -219,6 +278,15 @@ class TradingAgentsBridge:
             print("\n🔄 Rating Changes Detected:")
             for ch in changed:
                 print(ch)
+
+        failed = [r for r in results if not r.success]
+        if failed:
+            failed_tickers = ",".join(r.ticker for r in failed)
+            print("\n⚠️ Failed Tickers Detected:")
+            for f in failed:
+                print(f"   • {f.ticker}: {f.error_message}")
+            print("\n💡 To re-run only the failed ticker(s), execute:")
+            print(f"   python main.py --run-agents --tickers {failed_tickers}")
 
         print("=======================================================\n")
 

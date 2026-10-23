@@ -111,6 +111,11 @@ Reconcile target weights against current holdings using **Option B (Relative Dri
    - Built-in cash safety: Floor shares ($\lfloor \frac{|\Delta\$|}{P} \rfloor$) if rounding up would violate the 10% cash reserve or position cap.
    - If $|\Delta\$| / P < 0.5$ (share size rounds to 0), suppress to `HOLD` with reason `SUB_SHARE_MINIMUM`.
 
+4. **7-Day Transaction Cadence & Cooldown (`rebalance.min_transaction_interval_days: 7`):**
+   - Strictly limits transaction frequency to at most **one transaction per security every 7 days**.
+   - If a security had a confirmed transaction within the past 7 days (detected via historical Obsidian trade order reports and sequential broker CSV quantity changes), any proposed BUY or SELL is suppressed to `HOLD 🟡` with reason `COOLDOWN_ACTIVE`.
+   - Paces accumulating positions into steady weekly Dollar-Cost Averaging (DCA), paces divesting trims across weeks, and eliminates short-term whipsaws.
+
 ---
 
 ## 5. Output Directives & Obsidian Reporting (`pm/output/reporter.py`)

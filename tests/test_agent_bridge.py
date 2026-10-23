@@ -1,5 +1,6 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import pandas as pd
 import pytest
 
 from pm.agents.bridge import AgentEvaluationResult, TradingAgentsBridge
@@ -154,8 +155,55 @@ def test_run_batch(bridge_config):
     )
 
 
+def test_evaluate_ticker_transient_retry(bridge_config):
+    bridge = TradingAgentsBridge(bridge_config)
+
+    mock_graph_cls = MagicMock()
+    mock_graph_instance = MagicMock()
+    mock_graph_cls.return_value = mock_graph_instance
+
+    mock_state = {"mock_key": "val"}
+    mock_signal = MagicMock()
+    mock_signal.value = "Overweight"
+    # First attempt fails with transient RemoteProtocolError, second succeeds
+    mock_graph_instance.propagate.side_effect = [
+        RuntimeError("RemoteProtocolError: Server disconnected without sending a response."),
+        (mock_state, mock_signal),
+    ]
+    mock_graph_instance.save_reports.return_value = Path("/mock/vault/reports/reports/APP_20261012_120000")
+
+    with patch.dict("sys.modules", {"tradingagents.graph.trading_graph": MagicMock(TradingAgentsGraph=mock_graph_cls)}):
+        with patch("time.sleep") as mock_sleep:
+            result = bridge.evaluate_ticker(ticker="APP", max_attempts=2)
+
+    assert result.success is True
+    assert result.ticker == "APP"
+    assert result.signal == "Overweight"
+    assert mock_graph_instance.propagate.call_count == 2
+    mock_sleep.assert_any_call(10)
+
+
+def test_run_batch_reports_failed_tickers(bridge_config, capsys):
+    bridge = TradingAgentsBridge(bridge_config)
+    items = [
+        TriageItem(
+            ticker="APP", category="equities", asset_type="stock", analysts=["market"],
+            in_portfolio=True, status="MISSING", priority=1
+        ),
+    ]
+    mock_failed = AgentEvaluationResult(
+        ticker="APP", signal=None, report_path=None, success=False, error_message="Server disconnected"
+    )
+
+    with patch.object(bridge, "evaluate_ticker", return_value=mock_failed):
+        results = bridge.run_batch(items)
+
+    captured = capsys.readouterr().out
+    assert "Failed Tickers Detected" in captured
+    assert "python main.py --run-agents --tickers APP" in captured
+
+
 def test_get_latest_settled_trade_date():
-    import pandas as pd
     # Mock yf.download returning settled data
     mock_df = pd.DataFrame(
         {"Close": [100.0, 101.0, None]},
@@ -164,4 +212,5 @@ def test_get_latest_settled_trade_date():
     with patch("yfinance.download", return_value=mock_df):
         settled = TradingAgentsBridge.get_latest_settled_trade_date()
         assert settled == "2026-09-15"
+
 

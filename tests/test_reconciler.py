@@ -254,3 +254,81 @@ def test_transaction_stepping_and_caps():
     assert alloc_map["BAD"].reason == "AVOID_LIQUIDATION"
 
 
+def test_transaction_cooldown_suppression():
+    from datetime import date
+
+    reconciler = PortfolioReconciler(
+        min_transaction_interval_days=7,
+        min_dollar_trade=1500.0,
+        stepping_enabled=False,
+    )
+
+    as_of = date(2026, 10, 23)
+    total_value = 100000.0
+
+    holdings = {
+        # Traded 3 days ago (Oct 20) -> should be suppressed from buying more
+        "BUY_RECENT": Holding("BUY_RECENT", "Buy Recent Corp", quantity=10, last_price=100.0, current_value=1000.0),
+        # Traded 2 days ago (Oct 21) -> AVOID liquidation should be suppressed by strict 7-day cooldown
+        "SELL_RECENT": Holding("SELL_RECENT", "Sell Recent Corp", quantity=20, last_price=200.0, current_value=4000.0),
+        # Traded 8 days ago (Oct 15) -> eligible to trade
+        "BUY_ELIGIBLE": Holding("BUY_ELIGIBLE", "Eligible Corp", quantity=10, last_price=100.0, current_value=1000.0),
+    }
+
+    target_weights = {
+        "BUY_RECENT": 0.05,     # Target $5,000 (delta +$4,000)
+        "SELL_RECENT": 0.00,    # Target 0 (delta -$4,000)
+        "BUY_ELIGIBLE": 0.05,   # Target $5,000 (delta +$4,000)
+    }
+
+    realtime_prices = {
+        "BUY_RECENT": 100.0,
+        "SELL_RECENT": 200.0,
+        "BUY_ELIGIBLE": 100.0,
+    }
+
+    signals = {
+        "BUY_RECENT": SignalType.OVERWEIGHT,
+        "SELL_RECENT": SignalType.AVOID,
+        "BUY_ELIGIBLE": SignalType.OVERWEIGHT,
+    }
+
+    clusters = {1: ["BUY_RECENT"], 2: ["SELL_RECENT"], 3: ["BUY_ELIGIBLE"]}
+
+    last_transactions = {
+        "BUY_RECENT": date(2026, 10, 20),   # 3 days ago (< 7d)
+        "SELL_RECENT": date(2026, 10, 21),  # 2 days ago (< 7d)
+        "BUY_ELIGIBLE": date(2026, 10, 15), # 8 days ago (>= 7d)
+    }
+
+    allocations = reconciler.reconcile(
+        total_portfolio_value=total_value,
+        current_holdings=holdings,
+        target_weights=target_weights,
+        realtime_prices=realtime_prices,
+        signals=signals,
+        clusters=clusters,
+        last_transactions=last_transactions,
+        as_of_date=as_of,
+    )
+
+    alloc_map = {a.ticker: a for a in allocations}
+
+    # 1. BUY_RECENT: Traded 3 days ago -> suppressed to HOLD with COOLDOWN_ACTIVE
+    assert alloc_map["BUY_RECENT"].action == "HOLD"
+    assert alloc_map["BUY_RECENT"].order_shares == 0.0
+    assert "COOLDOWN_ACTIVE" in alloc_map["BUY_RECENT"].reason
+    assert "3d ago < 7d; 4d remaining" in alloc_map["BUY_RECENT"].reason
+
+    # 2. SELL_RECENT: Traded 2 days ago -> suppressed to HOLD even on AVOID
+    assert alloc_map["SELL_RECENT"].action == "HOLD"
+    assert alloc_map["SELL_RECENT"].order_shares == 0.0
+    assert "COOLDOWN_ACTIVE" in alloc_map["SELL_RECENT"].reason
+    assert "2d ago < 7d; 5d remaining" in alloc_map["SELL_RECENT"].reason
+
+    # 3. BUY_ELIGIBLE: Traded 8 days ago -> order proceeds normally
+    assert alloc_map["BUY_ELIGIBLE"].action == "BUY"
+    assert alloc_map["BUY_ELIGIBLE"].order_shares == 40.0
+
+
+

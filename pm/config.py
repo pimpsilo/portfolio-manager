@@ -53,11 +53,13 @@ def validate_config(config: Dict[str, Any], config_path: str) -> List[str]:
     positive = (
         ("rebalance.min_dollar_trade", rebalance.get("min_dollar_trade", 1500.0)),
         ("rebalance.stepping.max_trade_dollar_cap", stepping.get("max_trade_dollar_cap", 6000.0)),
+        ("rebalance.min_transaction_interval_days", rebalance.get("min_transaction_interval_days", stepping.get("cooldown_days", 7))),
         ("signals.max_age_days", config.get("signals", {}).get("max_age_days", 14)),
     )
     for name, value in positive:
         if not isinstance(value, (int, float)) or value < 0:
             raise ConfigurationError(f"{name} must be non-negative.")
+
 
     config_dir = Path(config_path).resolve().parent
     for key in ("reports_dir", "downloads_dir", "obsidian_vault_dir"):

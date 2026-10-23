@@ -54,3 +54,10 @@ def test_validate_config_risk_clustering_parameters(tmp_path: Path):
     with pytest.raises(ConfigurationError, match="risk.clustering.concentration_guide"):
         validate_config(invalid_guide, str(tmp_path / "config.yaml"))
 
+
+def test_validate_config_transaction_interval(tmp_path: Path):
+    invalid_cooldown = {"rebalance": {"min_transaction_interval_days": -1}}
+    with pytest.raises(ConfigurationError, match="rebalance.min_transaction_interval_days must be non-negative"):
+        validate_config(invalid_cooldown, str(tmp_path / "config.yaml"))
+
+

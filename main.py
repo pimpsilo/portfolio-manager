@@ -15,6 +15,14 @@ try:
 except ImportError:
     pass
 
+import os
+if "GOOGLE_API_KEY" in os.environ and "GEMINI_API_KEY" in os.environ:
+    if os.environ["GOOGLE_API_KEY"]:
+        os.environ.pop("GEMINI_API_KEY", None)
+
+import warnings
+warnings.filterwarnings("ignore", message=".*is not a valid FinishReason.*")
+
 from pm.agents.bridge import TradingAgentsBridge
 from pm.agents.triage import SignalTriageEngine
 from pm.engine.controller import PortfolioManagerEngine
