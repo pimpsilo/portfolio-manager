@@ -192,10 +192,16 @@ def test_output_paths_single_run_structural_parity(parity_env):
     # 1. Path A: Direct Reporter Update
     vault_a = parity_env["tmp_path"] / "vault_a"
     vault_a.mkdir()
+    cfg_a = dict(yaml.safe_load(cfg_file.read_text(encoding="utf-8")))
+    cfg_a["paths"]["obsidian_vault_dir"] = str(vault_a)
+    cfg_a["paths"]["trade_history_file"] = str(vault_a / "trade_history.json")
+    cfg_file_a = parity_env["tmp_path"] / "config_a.yaml"
+    cfg_file_a.write_text(yaml.dump(cfg_a), encoding="utf-8")
+
     with patch.object(MarketDataService, "fetch_realtime_prices", return_value=mock_prices), \
          patch.object(MarketDataService, "fetch_market_caps", return_value=mock_caps), \
          patch.object(MarketDataService, "fetch_historical_returns", return_value=mock_returns):
-        engine_a = PortfolioManagerEngine(config_path=str(cfg_file))
+        engine_a = PortfolioManagerEngine(config_path=str(cfg_file_a))
         summary_a = engine_a.run_solver(csv_path=str(csv1))
         reporter_a = MarkdownTradeReporter(output_dir=str(vault_a), append_daily_snapshots=True)
         path_a = reporter_a.write_report(summary_a)
@@ -206,6 +212,7 @@ def test_output_paths_single_run_structural_parity(parity_env):
     vault_b.mkdir()
     cfg_b = dict(engine_a.config)
     cfg_b["paths"]["obsidian_vault_dir"] = str(vault_b)
+    cfg_b["paths"]["trade_history_file"] = str(vault_b / "trade_history.json")
     cfg_file_b = parity_env["tmp_path"] / "config_b.yaml"
     cfg_file_b.write_text(yaml.dump(cfg_b), encoding="utf-8")
 
@@ -221,6 +228,7 @@ def test_output_paths_single_run_structural_parity(parity_env):
     vault_c.mkdir()
     cfg_c = dict(engine_a.config)
     cfg_c["paths"]["obsidian_vault_dir"] = str(vault_c)
+    cfg_c["paths"]["trade_history_file"] = str(vault_c / "trade_history.json")
     cfg_file_c = parity_env["tmp_path"] / "config_c.yaml"
     cfg_file_c.write_text(yaml.dump(cfg_c), encoding="utf-8")
 
@@ -239,6 +247,7 @@ def test_output_paths_single_run_structural_parity(parity_env):
     vault_d.mkdir()
     cfg_d = dict(engine_a.config)
     cfg_d["paths"]["obsidian_vault_dir"] = str(vault_d)
+    cfg_d["paths"]["trade_history_file"] = str(vault_d / "trade_history.json")
     cfg_file_d = parity_env["tmp_path"] / "config_d.yaml"
     cfg_file_d.write_text(yaml.dump(cfg_d), encoding="utf-8")
 

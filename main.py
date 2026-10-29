@@ -287,6 +287,8 @@ def main():
     )
     if args.execute:
         saved_path = reporter.write_report(summary, overwrite=args.overwrite)
+        if hasattr(engine, "history_tracker") and engine.history_tracker:
+            engine.history_tracker.record_trade_directives(summary.allocations, exec_date=summary.execution_date)
         print(f"\n✅ Trade orders markdown successfully written to:")
         print(f"   {saved_path}\n")
     else:

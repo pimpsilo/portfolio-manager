@@ -24,3 +24,4 @@ portfolio
 portfolio/
 *.log
 .env
+trade_history*.json

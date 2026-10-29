@@ -231,3 +231,84 @@ def test_get_cooldown_status():
     # Case 6: cooldown_days = 0 (disabled) -> None
     status_disabled = tracker.get_cooldown_status("RECENT", as_of_date=as_of, cooldown_days=0, last_transactions=last_txs)
     assert status_disabled is None
+
+
+def test_persistent_ledger_survives_downloads_deletion(tmp_path: Path):
+    ledger_file = tmp_path / "trade_history.json"
+    downloads_dir = tmp_path / "downloads"
+    downloads_dir.mkdir()
+
+    tracker = TransactionHistoryTracker(
+        downloads_dir=str(downloads_dir),
+        history_file=str(ledger_file),
+    )
+
+    # Day 1: baseline snapshot (Oct 18)
+    new_txs_1 = tracker.record_holdings_snapshot(
+        holdings={"AMD": 10.0, "MSFT": 20.0},
+        snapshot_date=date(2026, 10, 18),
+        source_file="Portfolio_Positions_Oct-18-2026.csv",
+    )
+    # First snapshot establishes baseline, 0 delta
+    assert new_txs_1 == []
+    assert ledger_file.exists()
+
+    # Day 2: snapshot on Oct 22 (AMD increased from 10 to 16 -> +6 BUY)
+    new_txs_2 = tracker.record_holdings_snapshot(
+        holdings={"AMD": 16.0, "MSFT": 20.0},
+        snapshot_date=date(2026, 10, 22),
+        source_file="Portfolio_Positions_Oct-22-2026.csv",
+    )
+    assert len(new_txs_2) == 1
+    assert new_txs_2[0].ticker == "AMD"
+    assert new_txs_2[0].action == "BUY"
+    assert new_txs_2[0].shares == 6.0
+    assert new_txs_2[0].trade_date == date(2026, 10, 22)
+
+    # SIMULATE USER DELETING ENTIRE DOWNLOADS FOLDER!
+    for f in downloads_dir.glob("*"):
+        f.unlink()
+    assert list(downloads_dir.glob("*")) == []
+
+    # Create a fresh tracker instance simulating a future run
+    fresh_tracker = TransactionHistoryTracker(
+        downloads_dir=str(downloads_dir),
+        history_file=str(ledger_file),
+    )
+
+    # Confirm AMD's transaction is 100% preserved in the ledger
+    as_of = date(2026, 10, 23)
+    txs = fresh_tracker.get_last_transactions(as_of_date=as_of)
+    assert "AMD" in txs
+    assert txs["AMD"].trade_date == date(2026, 10, 22)
+    assert txs["AMD"].action == "BUY"
+    assert txs["AMD"].shares == 6.0
+
+    # Cooldown check: AMD traded 1 day ago -> in cooldown (6 days remaining)!
+    status = fresh_tracker.get_cooldown_status("AMD", as_of_date=as_of, cooldown_days=7, last_transactions=txs)
+    assert status is not None
+    _, days_since, days_remaining = status
+    assert days_since == 1
+    assert days_remaining == 6
+
+
+def test_record_trade_directives_in_ledger(tmp_path: Path):
+    from unittest.mock import MagicMock
+
+    ledger_file = tmp_path / "trade_history.json"
+    tracker = TransactionHistoryTracker(history_file=str(ledger_file))
+
+    order_1 = MagicMock(action="BUY", order_shares=15.0, ticker="NVDA")
+    order_2 = MagicMock(action="HOLD", order_shares=0.0, ticker="AAPL")
+
+    tracker.record_trade_directives([order_1, order_2], exec_date=date(2026, 10, 23))
+
+    ledger = tracker.load_ledger()
+    assert "NVDA" in ledger["transactions"]
+    assert ledger["transactions"]["NVDA"][0]["action"] == "BUY"
+    assert ledger["transactions"]["NVDA"][0]["shares"] == 15.0
+    assert ledger["transactions"]["NVDA"][0]["trade_date"] == "2026-10-23"
+
+    # HOLD was not recorded as an active trade
+    assert "AAPL" not in ledger["transactions"]
+

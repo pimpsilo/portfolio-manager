@@ -64,6 +64,8 @@ class DownloadWatcher:
         path_obj = Path(csv_path)
         summary = self.engine.run_solver(csv_path=str(path_obj))
         out_path = self.reporter.write_report(summary, overwrite=overwrite)
+        if hasattr(self.engine, "history_tracker") and self.engine.history_tracker:
+            self.engine.history_tracker.record_trade_directives(summary.allocations, exec_date=summary.execution_date)
         return summary, out_path
 
     def run(self):

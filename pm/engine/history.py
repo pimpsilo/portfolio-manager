@@ -1,10 +1,12 @@
 import csv
+import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from pm.ingest.broker_csv import BrokerCSVParser
 
@@ -20,24 +22,28 @@ class TransactionRecord:
     trade_date: date
     action: str  # "BUY" or "SELL"
     shares: float
-    source: str  # "VAULT_REPORT" or "BROKER_CSV"
+    source: str  # "VAULT_REPORT", "BROKER_CSV", or "LEDGER"
 
 
 class TransactionHistoryTracker:
     """
     Tracks historical transactions across both generated Obsidian Trade Order reports
     and historical broker CSV exports to enforce transaction cadence and cooldowns.
+    Maintains a persistent JSON ledger file (trade_history.json) so transaction history
+    remains completely preserved even when ~/Downloads CSV files are deleted.
     """
 
     def __init__(
         self,
         obsidian_vault_dir: Optional[Union[str, Path]] = None,
         downloads_dir: Optional[Union[str, Path]] = None,
+        history_file: Optional[Union[str, Path]] = None,
         lookback_days: int = 30,
         equivalent_symbols: Optional[List[List[str]]] = None,
     ):
         self.obsidian_vault_dir = Path(obsidian_vault_dir) if obsidian_vault_dir else None
         self.downloads_dir = Path(downloads_dir) if downloads_dir else None
+        self.history_file = Path(history_file) if history_file else None
         self.lookback_days = lookback_days
         self.equivalent_symbols = equivalent_symbols or [
             ["GOOG", "GOOGL"],
@@ -53,6 +59,141 @@ class TransactionHistoryTracker:
             for sym in group:
                 mapping[sym] = group_set
         return mapping
+
+    def _empty_ledger(self) -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "last_updated": None,
+            "last_snapshot_date": None,
+            "last_source_file": None,
+            "last_holdings": {},
+            "transactions": {},
+        }
+
+    def load_ledger(self) -> Dict[str, Any]:
+        """Loads persistent trade history ledger from JSON file."""
+        if not self.history_file or not self.history_file.exists():
+            return self._empty_ledger()
+        try:
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if not isinstance(data, dict):
+                    return self._empty_ledger()
+                if "transactions" not in data:
+                    data["transactions"] = {}
+                if "last_holdings" not in data:
+                    data["last_holdings"] = {}
+                return data
+        except Exception as e:
+            logger.warning(f"Error loading trade history ledger from {self.history_file}: {e}")
+            return self._empty_ledger()
+
+    def save_ledger(self, data: Dict[str, Any]) -> None:
+        """Saves trade history ledger atomically."""
+        if not self.history_file:
+            return
+        try:
+            target = self.history_file.resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = target.with_suffix(".tmp")
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, sort_keys=True)
+            temp_path.replace(target)
+        except Exception as e:
+            logger.warning(f"Failed to save trade history ledger to {self.history_file}: {e}")
+
+    def record_holdings_snapshot(
+        self,
+        holdings: Dict[str, float],
+        snapshot_date: date,
+        source_file: Optional[str] = None,
+    ) -> List[TransactionRecord]:
+        """
+        Compares incoming holdings against last_holdings in the persistent ledger.
+        If any quantity changed, logs a new confirmed broker transaction.
+        Saves updated holdings snapshot to the ledger.
+        """
+        if not self.history_file:
+            return []
+        ledger = self.load_ledger()
+        prev_holdings: Dict[str, float] = ledger.get("last_holdings", {})
+        new_transactions: List[TransactionRecord] = []
+
+        if prev_holdings:
+            all_syms = set(prev_holdings.keys()) | set(holdings.keys())
+            for sym in all_syms:
+                q_prev = float(prev_holdings.get(sym, 0.0))
+                q_curr = float(holdings.get(sym, 0.0))
+                delta = q_curr - q_prev
+                if abs(delta) >= 0.0001:
+                    action = "BUY" if delta > 0 else "SELL"
+                    tx_record = TransactionRecord(
+                        ticker=sym,
+                        trade_date=snapshot_date,
+                        action=action,
+                        shares=round(abs(delta), 4),
+                        source="BROKER_CSV",
+                    )
+                    new_transactions.append(tx_record)
+
+                    tx_list = ledger["transactions"].setdefault(sym, [])
+                    already_exists = any(
+                        t.get("trade_date") == snapshot_date.isoformat()
+                        and t.get("action") == action
+                        and abs(float(t.get("shares", 0)) - abs(delta)) < 0.0001
+                        for t in tx_list
+                    )
+                    if not already_exists:
+                        tx_list.append({
+                            "trade_date": snapshot_date.isoformat(),
+                            "action": action,
+                            "shares": round(abs(delta), 4),
+                            "source": "BROKER_CSV",
+                        })
+
+        ledger["last_holdings"] = {s: float(q) for s, q in holdings.items()}
+        ledger["last_snapshot_date"] = snapshot_date.isoformat()
+        ledger["last_source_file"] = source_file
+        ledger["last_updated"] = datetime.now().isoformat()
+        self.save_ledger(ledger)
+        return new_transactions
+
+    def record_trade_directives(
+        self,
+        allocations: List[Any],
+        exec_date: date,
+    ) -> None:
+        """
+        Records active BUY/SELL directives into the persistent ledger when orders are executed.
+        """
+        if not self.history_file:
+            return
+        ledger = self.load_ledger()
+        changed = False
+
+        for a in allocations:
+            action = getattr(a, "action", "")
+            shares = float(getattr(a, "order_shares", 0.0))
+            ticker = getattr(a, "ticker", "")
+            if action in ("BUY", "SELL") and shares > 0 and ticker:
+                tx_list = ledger["transactions"].setdefault(ticker, [])
+                already_exists = any(
+                    t.get("trade_date") == exec_date.isoformat()
+                    and t.get("action") == action
+                    for t in tx_list
+                )
+                if not already_exists:
+                    tx_list.append({
+                        "trade_date": exec_date.isoformat(),
+                        "action": action,
+                        "shares": round(shares, 4),
+                        "source": "VAULT_REPORT",
+                    })
+                    changed = True
+
+        if changed:
+            ledger["last_updated"] = datetime.now().isoformat()
+            self.save_ledger(ledger)
 
     def scan_vault_reports(
         self,
@@ -110,19 +251,16 @@ class TransactionHistoryTracker:
                     action_cell = cols[6].upper()
                     shares_cell = cols[7]
 
-                    # Extract ticker
                     cleaned_ticker_cell = ticker_cell.replace("*", "").strip()
                     tm = _TICKER_EXTRACT_RE.search(cleaned_ticker_cell)
                     if not tm:
                         continue
                     ticker = tm.group(1).upper()
 
-                    # Check action
                     action = "BUY" if "BUY" in action_cell else ("SELL" if "SELL" in action_cell else None)
                     if not action:
                         continue
 
-                    # Extract shares
                     clean_shares = re.sub(r"[^0-9.]", "", shares_cell)
                     try:
                         order_shares = float(clean_shares)
@@ -169,7 +307,6 @@ class TransactionHistoryTracker:
                 state = parser.parse(str(p))
                 csv_date: Optional[date] = None
 
-                # Extract date from download_time or source_file
                 for text_source in (state.download_time, state.source_file, p.name):
                     if text_source:
                         m = re.search(r"([A-Za-z]{3})-(\d{1,2})-(\d{4})", text_source)
@@ -198,10 +335,8 @@ class TransactionHistoryTracker:
                 logger.debug(f"Skipping CSV {p.name} during history scan: {e}")
                 continue
 
-        # Sort chronologically by (date, mtime)
         snapshots.sort(key=lambda s: (s[0], s[1]))
 
-        # Compare consecutive snapshots
         for i in range(1, len(snapshots)):
             prev_date, _, prev_holdings = snapshots[i - 1]
             curr_date, _, curr_holdings = snapshots[i]
@@ -232,34 +367,62 @@ class TransactionHistoryTracker:
         include_as_of_date_vault_orders: bool = False,
     ) -> Dict[str, TransactionRecord]:
         """
-        Merges vault reports and broker CSV quantity changes into a unified mapping
-        of ticker -> most recent TransactionRecord, with dual-class symbol aliasing.
+        Merges persistent ledger records, vault reports, and broker CSV quantity changes
+        into a unified mapping of ticker -> most recent TransactionRecord, with dual-class symbol aliasing.
         """
         target_date = as_of_date or date.today()
+        merged: Dict[str, TransactionRecord] = {}
+
+        # 1. Load from persistent ledger file
+        ledger = self.load_ledger()
+        for ticker, tx_list in ledger.get("transactions", {}).items():
+            if isinstance(tx_list, list):
+                for item in tx_list:
+                    try:
+                        t_date = datetime.strptime(item["trade_date"], "%Y-%m-%d").date()
+                    except (KeyError, ValueError):
+                        continue
+                    if t_date <= target_date:
+                        existing = merged.get(ticker)
+                        if existing is None or t_date > existing.trade_date:
+                            merged[ticker] = TransactionRecord(
+                                ticker=ticker,
+                                trade_date=t_date,
+                                action=item.get("action", "BUY"),
+                                shares=float(item.get("shares", 0.0)),
+                                source=item.get("source", "LEDGER"),
+                            )
+
+        # 2. Merge with vault reports on disk
         vault_records = self.scan_vault_reports(
             target_date,
             include_as_of_date=include_as_of_date_vault_orders,
         )
+        for ticker, rec in vault_records.items():
+            existing = merged.get(ticker)
+            if existing is None or rec.trade_date >= existing.trade_date:
+                merged[ticker] = rec
+
+        # 3. Merge with broker CSV files in downloads_dir (if any exist)
         csv_records = self.scan_broker_csv_quantity_changes(target_date)
+        for ticker, rec in csv_records.items():
+            existing = merged.get(ticker)
+            if existing is None or rec.trade_date >= existing.trade_date:
+                merged[ticker] = rec
 
-        merged: Dict[str, TransactionRecord] = {}
-        all_tickers = set(vault_records.keys()) | set(csv_records.keys())
+        # 4. If ledger had empty transactions, auto-bootstrap with discovered transactions
+        if not ledger.get("transactions") and merged:
+            for ticker, rec in merged.items():
+                ledger["transactions"].setdefault(ticker, []).append({
+                    "trade_date": rec.trade_date.isoformat(),
+                    "action": rec.action,
+                    "shares": rec.shares,
+                    "source": rec.source,
+                })
+            ledger["last_updated"] = datetime.now().isoformat()
+            self.save_ledger(ledger)
 
-        for ticker in all_tickers:
-            v_rec = vault_records.get(ticker)
-            c_rec = csv_records.get(ticker)
-
-            if v_rec and c_rec:
-                # Take the more recent transaction
-                chosen = c_rec if c_rec.trade_date >= v_rec.trade_date else v_rec
-            elif c_rec:
-                chosen = c_rec
-            else:
-                chosen = v_rec  # type: ignore
-
-            merged[ticker] = chosen
-
-        # Apply dual-class symbol aliasing
+        # 5. Apply dual-class symbol aliasing
         alias_groups = self._alias_map()
         final_map: Dict[str, TransactionRecord] = dict(merged)
 

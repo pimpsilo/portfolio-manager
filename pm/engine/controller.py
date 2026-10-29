@@ -115,9 +115,20 @@ class PortfolioManagerEngine:
             stepping_cfg.get("cooldown_days", 7),
         )
         self.min_transaction_interval_days = int(min_tx_interval)
+        history_file_val = paths.get("trade_history_file", "trade_history.json")
+        if history_file_val:
+            h_path = Path(history_file_val)
+            if not h_path.is_absolute():
+                base_dir = Path(config_path).resolve().parent
+                h_path = (base_dir / h_path).resolve()
+            self.trade_history_file = str(h_path)
+        else:
+            self.trade_history_file = None
+
         self.history_tracker = TransactionHistoryTracker(
             obsidian_vault_dir=self.obsidian_vault_dir,
             downloads_dir=self.downloads_dir,
+            history_file=self.trade_history_file,
             equivalent_symbols=self.equivalent_symbols,
         )
         self.reconciler = PortfolioReconciler(
@@ -185,6 +196,24 @@ class PortfolioManagerEngine:
                     except ValueError:
                         pass
             as_of_date = csv_date if csv_date else date.today()
+
+        # Record holdings snapshot in persistent trade history ledger
+        tracker = getattr(self, "history_tracker", None)
+        if tracker is None:
+            tracker = TransactionHistoryTracker(
+                obsidian_vault_dir=getattr(self, "obsidian_vault_dir", None),
+                downloads_dir=getattr(self, "downloads_dir", None),
+                history_file=getattr(self, "trade_history_file", None),
+                equivalent_symbols=getattr(self, "equivalent_symbols", None),
+            )
+            self.history_tracker = tracker
+
+        current_quantities = {s: h.quantity for s, h in portfolio_state.holdings.items()}
+        tracker.record_holdings_snapshot(
+            holdings=current_quantities,
+            snapshot_date=as_of_date,
+            source_file=portfolio_state.source_file,
+        )
 
         logger.info("Ingesting Markdown analyst signals from vault...")
         parsed_signals = self.signal_parser.parse_all_signals(as_of_date=as_of_date)
