@@ -125,7 +125,7 @@ class ReconciliationSummary:
     target_equity_weight: float = 0.0
     unused_equity_budget: float = 0.0
     binding_constraints: List[str] = field(default_factory=list)
-    expired_holding_policy: str = "neutral"
+    expired_holding_policy: str = "freeze"
     max_cluster_exposure: float = 0.25
     cluster_details: Dict[int, Dict[str, Any]] = field(default_factory=dict)
 

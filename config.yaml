@@ -10,9 +10,9 @@ signals:
   max_age_days: 14               # Reports older than 14 days are expired
   stale_warning_days: 4          # Alert if report expires in <= 4 days (i.e. age >= 10 days)
   candidate_min_signal: "OVERWEIGHT"
-  expired_holding_policy: "neutral" # neutral | cap | trim
+  expired_holding_policy: "freeze" # freeze | neutral | cap | trim
   long_expired_days: 30
-  long_expired_policy: "trim"       # neutral | cap | trim
+  long_expired_policy: "freeze"     # freeze | neutral | cap | trim
   expired_weight_cap: 0.10
   missing_report_buy_policy: "block" # block | allow
   restrict_candidates_to_watchlist: true # Enforce that only tickers in stocks.csv or holdings enter investable universe
@@ -32,6 +32,7 @@ risk:
   enforce_cash_reserve_on_buys: true # Never allow total buys to draw down cash below min_cash_reserve
   max_cluster_exposure: 0.25         # Max 25% exposure per correlated cluster
   max_assets_per_cluster: 4          # Max 4 stocks per cluster (n <= 4 rationalization)
+  max_megacap_basket_exposure: 0.45  # Max 45% aggregate exposure across Mega-Cap basket (>= $200B)
 
   # Correlation Clustering Engine (aligned with Correlation_Analyzer)
   clustering:
@@ -41,6 +42,7 @@ risk:
     concentration_guide: "composite" # 'composite' (Cap Tier + Sharpe + Upside) | 'sharpe' | 'upside' | 'market_cap'
     distance_threshold: 0.70         # Cutoff (1 - r) when criterion='distance' (0.70 => r >= 0.30)
     history_lookback_days: 180       # Lookback period for daily returns (days)
+    overflow_policy: "share"         # share | drop (share: protect all holdings with shared 25% cap; block new entrants)
 
 # Option 5: Market-Cap / Maturity Anchor with Active Tilts
 market_cap_weighting:

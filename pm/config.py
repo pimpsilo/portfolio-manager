@@ -18,11 +18,15 @@ def validate_config(config: Dict[str, Any], config_path: str) -> List[str]:
     warnings: List[str] = []
 
     max_pos = risk.get("max_single_stock_exposure", risk.get("max_position_weight", 0.15))
-    bounded = (
+    max_megacap = risk.get("max_megacap_basket_exposure", risk.get("max_megacap_exposure"))
+    bounded = [
         ("risk.max_single_stock_exposure", max_pos, 0, 1),
         ("risk.min_cash_reserve", risk.get("min_cash_reserve", 0.15), 0, 1),
         ("risk.max_cluster_exposure", risk.get("max_cluster_exposure", 0.25), 0, 1),
-    )
+    ]
+    if max_megacap is not None:
+        bounded.append(("risk.max_megacap_basket_exposure", max_megacap, 0, 1))
+
     for name, value, lower, upper in bounded:
         if not isinstance(value, (int, float)) or not lower < value <= upper:
             raise ConfigurationError(f"{name} must be greater than {lower} and at most {upper}.")
@@ -46,6 +50,8 @@ def validate_config(config: Dict[str, Any], config_path: str) -> List[str]:
             raise ConfigurationError(
                 "risk.clustering.concentration_guide must be 'composite', 'sharpe', 'upside', or 'market_cap'."
             )
+        if clustering.get("overflow_policy") and clustering.get("overflow_policy") not in {"share", "drop"}:
+            raise ConfigurationError("risk.clustering.overflow_policy must be 'share' or 'drop'.")
         dist_thresh = clustering.get("distance_threshold")
         if dist_thresh is not None and (not isinstance(dist_thresh, (int, float)) or not 0 < dist_thresh <= 2):
             raise ConfigurationError("risk.clustering.distance_threshold must be between 0 and 2.")
@@ -71,10 +77,10 @@ def validate_config(config: Dict[str, Any], config_path: str) -> List[str]:
 
     watchlist = config.get("watchlist", {})
     signals = config.get("signals", {})
-    if signals.get("expired_holding_policy", "neutral") not in {"neutral", "cap", "trim"}:
-        raise ConfigurationError("signals.expired_holding_policy must be neutral, cap, or trim.")
-    if signals.get("long_expired_policy", "trim") not in {"neutral", "cap", "trim"}:
-        raise ConfigurationError("signals.long_expired_policy must be neutral, cap, or trim.")
+    if signals.get("expired_holding_policy", "freeze") not in {"neutral", "cap", "trim", "freeze"}:
+        raise ConfigurationError("signals.expired_holding_policy must be neutral, cap, trim, or freeze.")
+    if signals.get("long_expired_policy", "trim") not in {"neutral", "cap", "trim", "freeze"}:
+        raise ConfigurationError("signals.long_expired_policy must be neutral, cap, trim, or freeze.")
     if signals.get("missing_report_buy_policy", "block") not in {"block", "allow"}:
         raise ConfigurationError("signals.missing_report_buy_policy must be block or allow.")
     stocks_file = watchlist.get("stocks_file")

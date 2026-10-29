@@ -536,3 +536,56 @@ def test_control_universe_ignores_extraneous_reports(e2e_config, tmp_path):
     assert summary.download_time == "Sep-11-2026 3:24 p.m ET"
     assert summary.execution_timestamp is not None
 
+
+def test_pipeline_freeze_and_lock_expired_holding(e2e_config, tmp_path):
+    today = date(2026, 10, 20)
+    expired_date = today - timedelta(days=22) # 22 days old (> 14d)
+
+    # Write an expired report for AAPL with OVERWEIGHT signal
+    reports_dir = Path(e2e_config["paths"]["reports_dir"])
+    folder_name = f"AAPL_{expired_date.strftime('%Y%m%d')}_120000"
+    report_folder = reports_dir / folder_name
+    report_folder.mkdir(parents=True, exist_ok=True)
+    report_file = report_folder / "complete_report.md"
+    report_file.write_text("""# Research Report AAPL
+**Rating**: OVERWEIGHT
+**Price Target**: 250.0
+**Decision Summary**: Solid growth outlook.
+""")
+
+    e2e_config["signals"]["expired_holding_policy"] = "freeze"
+    engine = PortfolioManagerEngine(config=e2e_config)
+
+    mock_holdings = {
+        "AAPL": Holding("AAPL", "Apple Inc", quantity=50.0, last_price=200.0, current_value=10000.0),
+    }
+    mock_portfolio = PortfolioState(
+        total_account_value=100000.0,
+        cash_balance=90000.0,
+        cash_percent=90.0,
+        holdings=mock_holdings,
+    )
+
+    mock_prices = {"AAPL": 200.0}
+    mock_caps = {"AAPL": 3_000_000_000_000}
+    import pandas as pd
+    mock_returns = pd.DataFrame({"AAPL": [0.01, -0.01, 0.02, -0.01]})
+
+    with patch.object(engine.csv_parser, "parse", return_value=mock_portfolio), \
+         patch.object(engine.market_data, "fetch_realtime_prices", return_value=mock_prices), \
+         patch.object(engine.market_data, "fetch_market_caps", return_value=mock_caps), \
+         patch.object(engine.market_data, "fetch_historical_returns", return_value=mock_returns), \
+         patch.object(engine.history_tracker, "get_last_transactions", return_value={}):
+        summary = engine.run_solver(as_of_date=today)
+
+    assert summary.expired_holding_policy == "freeze"
+    alloc_map = {a.ticker: a for a in summary.allocations}
+    aapl_alloc = alloc_map["AAPL"]
+
+    # Even though AAPL has 90% cash available and OVERWEIGHT signal, trading must be LOCKED
+    assert aapl_alloc.action == "HOLD"
+    assert aapl_alloc.order_shares == 0.0
+    assert "FREEZE_AND_LOCK" in aapl_alloc.reason
+    assert "Report expired 22d ago" in aapl_alloc.reason
+
+

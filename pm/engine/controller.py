@@ -3,7 +3,7 @@ import math
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 import yaml
 
 from pm.ingest.broker_csv import BrokerCSVParser
@@ -24,9 +24,12 @@ class PortfolioManagerEngine:
     Main controller orchestrating the 5-step Portfolio Management solver.
     """
 
-    def __init__(self, config_path: str = "config.yaml"):
-        with open(config_path, "r", encoding="utf-8") as f:
-            self.config = yaml.safe_load(f)
+    def __init__(self, config_path: str = "config.yaml", config: Optional[Dict[str, Any]] = None):
+        if config is not None:
+            self.config = config
+        else:
+            with open(config_path, "r", encoding="utf-8") as f:
+                self.config = yaml.safe_load(f)
         for warning in validate_config(self.config, config_path):
             logger.warning(warning)
 
@@ -48,9 +51,9 @@ class PortfolioManagerEngine:
         self.max_age_days = signals_cfg.get("max_age_days", 14)
         self.stale_warning_days = signals_cfg.get("stale_warning_days", 4)
         self.candidate_min_signal = SignalType.from_str(signals_cfg.get("candidate_min_signal", "OVERWEIGHT"))
-        self.expired_holding_policy = signals_cfg.get("expired_holding_policy", "neutral")
+        self.expired_holding_policy = signals_cfg.get("expired_holding_policy", "freeze")
         self.long_expired_days = int(signals_cfg.get("long_expired_days", 30))
-        self.long_expired_policy = signals_cfg.get("long_expired_policy", "trim")
+        self.long_expired_policy = signals_cfg.get("long_expired_policy", "freeze")
         self.expired_weight_cap = float(signals_cfg.get("expired_weight_cap", 0.10))
         self.missing_report_buy_policy = signals_cfg.get("missing_report_buy_policy", "block")
 
@@ -80,6 +83,7 @@ class PortfolioManagerEngine:
         lookback_days = clustering_cfg.get(
             "history_lookback_days", risk_cfg.get("history_lookback_days", 180)
         )
+        self.cluster_overflow_policy = clustering_cfg.get("overflow_policy", "share")
 
         self.market_data = MarketDataService(lookback_days=lookback_days)
         self.cluster_engine = CorrelationClusterEngine(
@@ -90,17 +94,22 @@ class PortfolioManagerEngine:
             max_assets_per_cluster=max_assets_per_cluster,
             distance_threshold=distance_threshold,
             cophenetic_threshold=legacy_cophenetic,
+            overflow_policy=self.cluster_overflow_policy,
         )
         self.max_single_stock_exposure = risk_cfg.get(
             "max_single_stock_exposure", risk_cfg.get("max_position_weight", 0.15)
         )
         self.max_cluster_exposure = risk_cfg.get("max_cluster_exposure", 0.25)
+        self.max_megacap_basket_exposure = risk_cfg.get(
+            "max_megacap_basket_exposure", risk_cfg.get("max_megacap_exposure", 0.45)
+        )
         self.max_assets_per_cluster = max_assets_per_cluster
         self.enforce_cash_reserve = risk_cfg.get("enforce_cash_reserve_on_buys", True)
         self.optimizer = PortfolioConstraintOptimizer(
             max_position_weight=self.max_single_stock_exposure,
             min_cash_reserve=risk_cfg.get("min_cash_reserve", 0.15),
             max_cluster_exposure=self.max_cluster_exposure,
+            max_megacap_exposure=self.max_megacap_basket_exposure,
             multipliers=multipliers,
             market_cap_cfg=market_cap_cfg,
         )
@@ -143,6 +152,7 @@ class PortfolioManagerEngine:
             max_trade_dollar_cap=stepping_cfg.get("max_trade_dollar_cap", 6000.0),
             avoid_step_factor=stepping_cfg.get("avoid_step_factor", 1.00),
             min_transaction_interval_days=self.min_transaction_interval_days,
+            max_position_weight=self.max_single_stock_exposure,
         )
 
     def _load_allowed_candidates(self) -> Set[str]:
@@ -300,23 +310,26 @@ class PortfolioManagerEngine:
         # Map signals for all universe assets
         active_signals: Dict[str, SignalType] = {}
         expired_cap_tickers: Set[str] = set()
+        frozen_expired_tickers: Set[str] = set()
         for t in sorted_universe:
             if t in parsed_signals:
                 sig_obj = parsed_signals[t]
                 if sig_obj.is_expired:
-                    expired_holding_policy = getattr(self, "expired_holding_policy", "neutral")
+                    expired_holding_policy = getattr(self, "expired_holding_policy", "freeze")
                     long_expired_days = getattr(self, "long_expired_days", 30)
-                    long_expired_policy = getattr(self, "long_expired_policy", "trim")
+                    long_expired_policy = getattr(self, "long_expired_policy", "freeze")
                     policy = expired_holding_policy
                     if sig_obj.age_days >= long_expired_days:
                         policy = long_expired_policy
-                    active_signals[t] = (
-                        SignalType.UNDERWEIGHT
-                        if policy == "trim"
-                        else SignalType.EQUAL_WEIGHT
-                    )
-                    if policy == "cap":
-                        expired_cap_tickers.add(t)
+                    if policy == "freeze":
+                        active_signals[t] = sig_obj.signal
+                        frozen_expired_tickers.add(t)
+                    elif policy == "trim":
+                        active_signals[t] = SignalType.UNDERWEIGHT
+                    else:
+                        active_signals[t] = SignalType.EQUAL_WEIGHT
+                        if policy == "cap":
+                            expired_cap_tickers.add(t)
                 else:
                     active_signals[t] = sig_obj.signal
             else:
@@ -373,6 +386,8 @@ class PortfolioManagerEngine:
             t: parsed_signals[t].target_price for t in sorted_universe if t in parsed_signals
         }
         max_assets_n = getattr(self, "max_assets_per_cluster", 4)
+        held_tickers_set = set(portfolio_state.holdings.keys())
+        overflow_policy = getattr(self, "cluster_overflow_policy", "share")
         rationalized_clusters, excluded_by_rationalization = self.cluster_engine.rationalize_clusters(
             clusters=clusters,
             returns_df=returns_df,
@@ -381,6 +396,8 @@ class PortfolioManagerEngine:
             realtime_prices=realtime_prices,
             target_prices=target_prices,
             max_assets=max_assets_n,
+            held_tickers=held_tickers_set,
+            overflow_policy=overflow_policy,
         )
 
         effective_signals = dict(active_signals)
@@ -428,13 +445,21 @@ class PortfolioManagerEngine:
             as_of_date=as_of_date,
         )
 
-        # Tag rationalized positions in reasons
+        # Tag rationalized positions in reasons and enforce freeze-and-lock on expired signals
         for a in allocations:
             if a.ticker in excluded_by_rationalization and a.action == "SELL":
                 if "AVOID" in a.reason:
                     a.reason = "RATIONALIZED_CLUSTER_CAP"
                 else:
                     a.reason = f"{a.reason} [RATIONALIZED_CLUSTER_CAP]"
+            if a.ticker in frozen_expired_tickers:
+                if "FORCED_CEILING_TRIM" in a.reason:
+                    a.reason = f"{a.reason} [FROZEN_EXPIRED]"
+                else:
+                    age = parsed_signals[a.ticker].age_days if a.ticker in parsed_signals else 15
+                    a.action = "HOLD"
+                    a.order_shares = 0.0
+                    a.reason = f"FREEZE_AND_LOCK (Report expired {age}d ago; trading locked pending research)"
 
         # 7. Step 6: Dry Powder Cash Reserve Guard (Enforce Hard min_cash_reserve)
         # Guarantees that total buy orders do not deplete cash below the target cash reserve,
@@ -601,7 +626,7 @@ class PortfolioManagerEngine:
             target_equity_weight=float(diagnostics.get("target_equity_weight", sum(target_weights.values()))),
             unused_equity_budget=float(diagnostics.get("unused_equity_budget", 0.0)),
             binding_constraints=list(diagnostics.get("binding_constraints", [])),
-            expired_holding_policy=getattr(self, "expired_holding_policy", "neutral"),
+            expired_holding_policy=getattr(self, "expired_holding_policy", "freeze"),
             max_cluster_exposure=getattr(self, "max_cluster_exposure", 0.25),
             cluster_details=cluster_details,
         )

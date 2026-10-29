@@ -27,12 +27,14 @@ class PortfolioConstraintOptimizer:
         max_position_weight: float = 0.15,      # 15%
         min_cash_reserve: float = 0.10,         # 10%
         max_cluster_exposure: float = 0.25,     # 25%
+        max_megacap_exposure: Optional[float] = None,  # Optional aggregate Mega-Cap cap
         multipliers: Optional[Dict[SignalType, float]] = None,
         market_cap_cfg: Optional[Dict] = None,
     ):
         self.max_position_weight = max_position_weight
         self.min_cash_reserve = min_cash_reserve
         self.max_cluster_exposure = max_cluster_exposure
+        self.max_megacap_exposure = max_megacap_exposure
         self.multipliers = multipliers or self.DEFAULT_MULTIPLIERS
         self.market_cap_cfg = market_cap_cfg or {}
         self.last_diagnostics: Dict[str, object] = {}
@@ -114,6 +116,22 @@ class PortfolioConstraintOptimizer:
                     binding_constraints.append(f"position:{t}")
                     violation_found = True
 
+            # Check 1.5: Aggregate Mega-Cap Basket Cap (e.g. 45%)
+            if self.max_megacap_exposure and self.max_megacap_exposure > 0:
+                mega_thresh = self.market_cap_cfg.get("mega_cap_threshold", 200e9) if self.market_cap_cfg else 200e9
+                mega_members = [
+                    t for t in weights
+                    if weights[t] > 0 and (market_caps.get(t) or 0.0) >= mega_thresh
+                ]
+                if mega_members:
+                    mega_total = sum(weights[m] for m in mega_members)
+                    if mega_total > self.max_megacap_exposure + 1e-6:
+                        scale_factor = self.max_megacap_exposure / mega_total
+                        for m in mega_members:
+                            weights[m] *= scale_factor
+                        binding_constraints.append("megacap_basket")
+                        violation_found = True
+
             # Check 2: Cluster Exposure Cap (25%)
             for c_id, members in clusters.items():
                 active_members = [m for m in members if m in weights and weights[m] > 0]
@@ -156,9 +174,12 @@ class PortfolioConstraintOptimizer:
         # Round very small epsilon weights
         weights = {t: round(w, 6) if w > 1e-5 else 0.0 for t, w in weights.items()}
         final_total = sum(weights.values())
+        mega_thresh = self.market_cap_cfg.get("mega_cap_threshold", 200e9) if self.market_cap_cfg else 200e9
+        megacap_total = sum(w for t, w in weights.items() if (market_caps.get(t) or 0.0) >= mega_thresh)
         self.last_diagnostics = {
             "initial_equity_weight": round(initial_total, 6),
             "target_equity_weight": round(final_total, 6),
+            "megacap_basket_weight": round(megacap_total, 6),
             "unused_equity_budget": round(max_equity_budget - final_total, 6),
             "max_equity_budget": max_equity_budget,
             "binding_constraints": sorted(set(binding_constraints)),

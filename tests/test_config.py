@@ -61,3 +61,32 @@ def test_validate_config_transaction_interval(tmp_path: Path):
         validate_config(invalid_cooldown, str(tmp_path / "config.yaml"))
 
 
+def test_validate_config_strategy_extensions(tmp_path: Path):
+    # Valid configurations
+    valid = {
+        "signals": {
+            "expired_holding_policy": "freeze",
+            "long_expired_policy": "freeze",
+        },
+        "risk": {
+            "max_megacap_basket_exposure": 0.45,
+            "clustering": {
+                "overflow_policy": "share",
+            },
+        },
+    }
+    warnings = validate_config(valid, str(tmp_path / "config.yaml"))
+    assert warnings == []
+
+    # Invalid overflow_policy
+    invalid_overflow = {"risk": {"clustering": {"overflow_policy": "invalid"}}}
+    with pytest.raises(ConfigurationError, match=r"risk\.clustering\.overflow_policy must be"):
+        validate_config(invalid_overflow, str(tmp_path / "config.yaml"))
+
+    # Invalid max_megacap_basket_exposure
+    invalid_megacap = {"risk": {"max_megacap_basket_exposure": 1.5}}
+    with pytest.raises(ConfigurationError, match=r"risk\.max_megacap_basket_exposure must be"):
+        validate_config(invalid_megacap, str(tmp_path / "config.yaml"))
+
+
+

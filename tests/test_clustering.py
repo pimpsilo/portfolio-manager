@@ -134,3 +134,56 @@ def test_compute_cluster_stats():
     assert stats[2]["member_count"] == 1
     assert stats[2]["anchor_lead"] == "COST"
 
+
+def test_rationalize_clusters_weight_sharing():
+    """
+    Verifies that under overflow_policy='share', all existing portfolio holdings
+    in a cluster are retained (even if > max_assets, e.g. 5 held stocks), while
+    new candidate entrants are blocked.
+    """
+    clusters = {
+        1: ["NVDA", "MSFT", "AMZN", "META", "AVGO", "CIEN"],
+        2: ["COST", "EG"],
+    }
+    held_tickers = {"NVDA", "MSFT", "AMZN", "META", "AVGO", "COST", "EG"}
+    
+    dates = pd.date_range("2026-01-01", periods=10, freq="B")
+    all_tickers = ["NVDA", "MSFT", "AMZN", "META", "AVGO", "CIEN", "COST", "EG"]
+    returns_df = pd.DataFrame(np.random.randn(10, len(all_tickers)) * 0.01, index=dates, columns=all_tickers)
+    market_caps = {
+        "NVDA": 3_000_000_000_000,
+        "MSFT": 3_000_000_000_000,
+        "AMZN": 2_000_000_000_000,
+        "META": 1_500_000_000_000,
+        "AVGO": 800_000_000_000,
+        "CIEN": 50_000_000_000,
+        "COST": 400_000_000_000,
+        "EG": 14_000_000_000,
+    }
+    signals = {t: "OVERWEIGHT" for t in market_caps}
+    prices = {t: 100.0 for t in market_caps}
+    tps = {t: 120.0 for t in market_caps}
+
+    engine = CorrelationClusterEngine(k=2, max_assets_per_cluster=4, overflow_policy="share")
+    rationalized, excluded = engine.rationalize_clusters(
+        clusters=clusters,
+        returns_df=returns_df,
+        market_caps=market_caps,
+        signals=signals,
+        realtime_prices=prices,
+        target_prices=tps,
+        max_assets=4,
+        held_tickers=held_tickers,
+        overflow_policy="share",
+    )
+
+    # Cluster 1 must retain ALL 5 held members
+    assert len(rationalized[1]) == 5
+    assert set(rationalized[1]) == {"NVDA", "MSFT", "AMZN", "META", "AVGO"}
+    # Candidate CIEN must be excluded
+    assert "CIEN" in excluded
+    # None of the held positions should be excluded
+    for h in ["NVDA", "MSFT", "AMZN", "META", "AVGO"]:
+        assert h not in excluded
+
+

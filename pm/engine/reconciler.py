@@ -25,6 +25,7 @@ class PortfolioReconciler:
         max_trade_dollar_cap: float = 6000.0,
         avoid_step_factor: float = 1.00,
         min_transaction_interval_days: int = 7,
+        max_position_weight: float = 0.15,
     ):
         self.relative_threshold = relative_threshold
         self.hold_drift_tolerance = hold_drift_tolerance
@@ -37,6 +38,7 @@ class PortfolioReconciler:
         self.max_trade_dollar_cap = max_trade_dollar_cap
         self.avoid_step_factor = avoid_step_factor
         self.min_transaction_interval_days = min_transaction_interval_days
+        self.max_position_weight = max_position_weight
 
     def reconcile(
         self,
@@ -129,9 +131,13 @@ class PortfolioReconciler:
                 rel_drift = abs_delta_dollars / target_value if target_value > 0 else 1.0
 
                 # Determine effective drift tolerance:
-                # If holding is above target but analyst rating is EQUAL_WEIGHT (Hold),
-                # allow it to float up to hold_drift_tolerance before forcing trims.
-                if sig == SignalType.EQUAL_WEIGHT and dollar_delta < 0:
+                # If holding exceeds max_position_weight ceiling (15%), immediately force trim
+                is_hard_ceiling_breach = (current_weight > self.max_position_weight + 1e-6) and (dollar_delta < 0)
+
+                if is_hard_ceiling_breach:
+                    effective_threshold = 0.0
+                    is_hold_policy = False
+                elif sig == SignalType.EQUAL_WEIGHT and dollar_delta < 0:
                     effective_threshold = self.hold_drift_tolerance
                     is_hold_policy = True
                 else:
@@ -186,11 +192,18 @@ class PortfolioReconciler:
                             if order_shares >= current_shares:
                                 order_shares = current_shares
                                 is_whole_share = current_shares.is_integer()
-                            reason = (
-                                f"REBALANCE_TRIM_STEP ({self.rebalance_step_factor*100:.0f}%, cap ${self.max_trade_dollar_cap:,.0f})"
-                                if self.stepping_enabled
-                                else f"REBALANCE_TRIM ({rel_drift*100:.1f}% drift)"
-                            )
+                            if is_hard_ceiling_breach:
+                                reason = (
+                                    f"FORCED_CEILING_TRIM_STEP ({self.rebalance_step_factor*100:.0f}%, cap ${self.max_trade_dollar_cap:,.0f}, {current_weight*100:.1f}% > {self.max_position_weight*100:.1f}%)"
+                                    if self.stepping_enabled
+                                    else f"FORCED_CEILING_TRIM ({current_weight*100:.1f}% > {self.max_position_weight*100:.1f}%)"
+                                )
+                            else:
+                                reason = (
+                                    f"REBALANCE_TRIM_STEP ({self.rebalance_step_factor*100:.0f}%, cap ${self.max_trade_dollar_cap:,.0f})"
+                                    if self.stepping_enabled
+                                    else f"REBALANCE_TRIM ({rel_drift*100:.1f}% drift)"
+                                )
                         else:
                             action = "HOLD"
                             order_shares = 0.0

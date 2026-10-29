@@ -28,6 +28,7 @@ class CorrelationClusterEngine:
         max_assets_per_cluster: Optional[int] = 4,
         distance_threshold: float = 0.70,
         cophenetic_threshold: Optional[float] = None,
+        overflow_policy: str = "share",
     ):
         if criterion is not None:
             self.criterion = criterion
@@ -42,6 +43,7 @@ class CorrelationClusterEngine:
         self.max_assets_per_cluster = max_assets_per_cluster
         self.distance_threshold = distance_threshold
         self.cophenetic_threshold = cophenetic_threshold
+        self.overflow_policy = overflow_policy
 
         # Backward compatibility for legacy cophenetic_threshold argument
         if cophenetic_threshold is not None:
@@ -111,6 +113,55 @@ class CorrelationClusterEngine:
         )
         return clusters
 
+    def _score_member(
+        self,
+        t: str,
+        signals: Dict[str, Any],
+        market_caps: Dict[str, float],
+        returns_df: pd.DataFrame,
+        realtime_prices: Dict[str, float],
+        target_prices: Dict[str, Optional[float]],
+        concentration_guide: str,
+    ) -> float:
+        sig_obj = signals.get(t)
+        sig_val = getattr(sig_obj, "value", str(sig_obj)) if sig_obj else "EQUAL_WEIGHT"
+        if sig_val == "OVERWEIGHT":
+            sig_pts = 2.0
+        elif sig_val == "EQUAL_WEIGHT":
+            sig_pts = 1.0
+        else:
+            sig_pts = 0.0
+
+        mc = market_caps.get(t, 0.0)
+        if mc >= 200_000_000_000:
+            cap_pts = 3.0
+        elif mc >= 50_000_000_000:
+            cap_pts = 2.0
+        else:
+            cap_pts = 1.0
+
+        sharpe = 0.0
+        if t in returns_df and not returns_df[t].dropna().empty:
+            series = returns_df[t].dropna()
+            if len(series) >= 20 and series.std() > 1e-8:
+                sharpe = float((series.mean() * 252) / (series.std() * np.sqrt(252)))
+
+        upside_pct = 0.0
+        tp = target_prices.get(t)
+        price = realtime_prices.get(t, 0.0)
+        if tp and price > 0:
+            upside_pct = float((tp - price) / price * 100.0)
+
+        if concentration_guide == "sharpe":
+            return (sig_pts * 100.0) + sharpe
+        elif concentration_guide == "upside":
+            return (sig_pts * 100.0) + upside_pct
+        elif concentration_guide == "market_cap":
+            log_mc = math.log10(max(1.0, mc))
+            return (sig_pts * 100.0) + log_mc
+        else:
+            return (sig_pts * 100.0) + (cap_pts * 10.0) + sharpe + (0.1 * upside_pct)
+
     def rationalize_clusters(
         self,
         clusters: Dict[int, List[str]],
@@ -121,14 +172,16 @@ class CorrelationClusterEngine:
         target_prices: Optional[Dict[str, Optional[float]]] = None,
         max_assets: Optional[int] = None,
         guide: Optional[str] = None,
+        held_tickers: Optional[Set[str]] = None,
+        overflow_policy: Optional[str] = None,
     ) -> Tuple[Dict[int, List[str]], Set[str]]:
         """
         Rationalizes clusters so that no single cluster has more than max_assets.
-        Members in oversized clusters are ranked according to `guide`:
-          - 'composite'  : (Signal Points * 100) + (Cap Tier * 10) + Sharpe + (0.1 * Upside%)
-          - 'sharpe'     : (Signal Points * 100) + Sharpe
-          - 'upside'     : (Signal Points * 100) + Upside%
-          - 'market_cap' : (Signal Points * 100) + log10(Market Cap)
+        In 'share' overflow policy with held_tickers provided:
+          - Retains all existing holdings in the cluster (cluster cap 25% is shared proportionally)
+          - Blocks new non-held candidate entrants if cluster capacity is reached
+        In 'drop' policy (or held_tickers=None):
+          - Drops lowest-scoring members to strictly enforce n <= max_assets.
 
         Returns: (rationalized_clusters, set_of_excluded_tickers)
         """
@@ -137,6 +190,7 @@ class CorrelationClusterEngine:
             return clusters, set()
 
         concentration_guide = guide or self.concentration_guide or "composite"
+        policy = overflow_policy or getattr(self, "overflow_policy", "share")
         target_prices = target_prices or {}
 
         rationalized_clusters: Dict[int, List[str]] = {}
@@ -147,57 +201,45 @@ class CorrelationClusterEngine:
                 rationalized_clusters[c_id] = list(members)
                 continue
 
-            # Compute scoring metrics for each member in oversized cluster
-            scores: List[Tuple[float, str]] = []
-            for t in members:
-                # 1. Signal Rank
-                sig_obj = signals.get(t)
-                sig_val = getattr(sig_obj, "value", str(sig_obj)) if sig_obj else "EQUAL_WEIGHT"
-                if sig_val == "OVERWEIGHT":
-                    sig_pts = 2.0
-                elif sig_val == "EQUAL_WEIGHT":
-                    sig_pts = 1.0
+            # Soft-cap weight sharing when holdings are provided
+            if policy == "share" and held_tickers is not None:
+                held_in_cluster = [t for t in members if t in held_tickers]
+                candidates_in_cluster = [t for t in members if t not in held_tickers]
+
+                if len(held_in_cluster) >= max_n:
+                    # Retain all held assets with shared cluster cap; block all new candidates
+                    rationalized_clusters[c_id] = list(held_in_cluster)
+                    for c in candidates_in_cluster:
+                        excluded_tickers.add(c)
+                    logger.info(
+                        f"Cluster {c_id} has {len(held_in_cluster)} held assets (>= max {max_n}). "
+                        f"Retaining all held assets with shared 25% cap; blocked {len(candidates_in_cluster)} candidate entrants."
+                    )
+                    continue
                 else:
-                    sig_pts = 0.0
+                    open_slots = max_n - len(held_in_cluster)
+                    candidate_scores = [
+                        (self._score_member(t, signals, market_caps, returns_df, realtime_prices, target_prices, concentration_guide), t)
+                        for t in candidates_in_cluster
+                    ]
+                    candidate_scores.sort(key=lambda x: x[0], reverse=True)
+                    retained_cands = [t for _, t in candidate_scores[:open_slots]]
+                    dropped_cands = [t for _, t in candidate_scores[open_slots:]]
 
-                # 2. Market Cap Tier
-                mc = market_caps.get(t, 0.0)
-                if mc >= 200_000_000_000:  # $200B Mega-Cap
-                    cap_pts = 3.0
-                elif mc >= 50_000_000_000:  # $50B Large-Cap
-                    cap_pts = 2.0
-                else:
-                    cap_pts = 1.0
+                    rationalized_clusters[c_id] = held_in_cluster + retained_cands
+                    for d in dropped_cands:
+                        excluded_tickers.add(d)
+                    logger.info(
+                        f"Cluster {c_id} has {len(held_in_cluster)} held assets (< max {max_n}). "
+                        f"Admitted top {len(retained_cands)} candidates, blocked {len(dropped_cands)}."
+                    )
+                    continue
 
-                # 3. 6-Month Sharpe Ratio
-                sharpe = 0.0
-                if t in returns_df and not returns_df[t].dropna().empty:
-                    series = returns_df[t].dropna()
-                    if len(series) >= 20 and series.std() > 1e-8:
-                        sharpe = float((series.mean() * 252) / (series.std() * np.sqrt(252)))
-
-                # 4. Target Price Upside %
-                upside_pct = 0.0
-                tp = target_prices.get(t)
-                price = realtime_prices.get(t, 0.0)
-                if tp and price > 0:
-                    upside_pct = float((tp - price) / price * 100.0)
-
-                # Calculate final score based on concentration_guide
-                if concentration_guide == "sharpe":
-                    score = (sig_pts * 100.0) + sharpe
-                elif concentration_guide == "upside":
-                    score = (sig_pts * 100.0) + upside_pct
-                elif concentration_guide == "market_cap":
-                    log_mc = math.log10(max(1.0, mc))
-                    score = (sig_pts * 100.0) + log_mc
-                else:
-                    # 'composite': Cap Tier Anchor + Sharpe + Upside bonus
-                    score = (sig_pts * 100.0) + (cap_pts * 10.0) + sharpe + (0.1 * upside_pct)
-
-                scores.append((score, t))
-
-            # Sort descending by score
+            # Legacy/default drop behavior: rank all members and drop beyond max_n
+            scores = [
+                (self._score_member(t, signals, market_caps, returns_df, realtime_prices, target_prices, concentration_guide), t)
+                for t in members
+            ]
             scores.sort(key=lambda x: x[0], reverse=True)
             retained = [t for _, t in scores[:max_n]]
             dropped = [t for _, t in scores[max_n:]]

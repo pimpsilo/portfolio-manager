@@ -189,3 +189,59 @@ def test_dry_powder_cash_reserve_guard():
     # Ending cash must be >= 15% reserve ($15,000)
     assert projected_ending_cash >= target_cash_reserve
     assert abs(projected_ending_cash - 15000.0) < 1.0
+
+
+def test_megacap_basket_cap():
+    """
+    Verifies that multiple mega-cap positions (>= $200B) are collectively capped
+    at max_megacap_exposure (e.g. 45%), preserving relative weights among themselves
+    and leaving large/mid-caps untouched.
+    """
+    tickers = ["AAPL_M", "MSFT_M", "NVDA_M", "MID_A", "MID_B"]
+    signals = {
+        "AAPL_M": SignalType.OVERWEIGHT,
+        "MSFT_M": SignalType.OVERWEIGHT,
+        "NVDA_M": SignalType.OVERWEIGHT,
+        "MID_A": SignalType.EQUAL_WEIGHT,
+        "MID_B": SignalType.EQUAL_WEIGHT,
+    }
+    # Separate clusters so cluster limits don't interfere
+    clusters = {1: ["AAPL_M"], 2: ["MSFT_M"], 3: ["NVDA_M"], 4: ["MID_A"], 5: ["MID_B"]}
+    market_caps = {
+        "AAPL_M": 3000e9,
+        "MSFT_M": 3000e9,
+        "NVDA_M": 2500e9,
+        "MID_A": 20e9,
+        "MID_B": 15e9,
+    }
+
+    optimizer = PortfolioConstraintOptimizer(
+        max_position_weight=0.20,
+        min_cash_reserve=0.15,
+        max_cluster_exposure=0.30,
+        max_megacap_exposure=0.45,
+        market_cap_cfg={
+            "enabled": True,
+            "mega_cap_threshold": 200e9,
+            "large_cap_threshold": 50e9,
+            "tier_multipliers": {
+                "mega_cap": 3.0,
+                "large_cap": 1.8,
+                "mid_cap": 1.0,
+            },
+        },
+    )
+
+    weights = optimizer.optimize_weights(tickers, signals, clusters, market_caps=market_caps)
+
+    mega_total = weights["AAPL_M"] + weights["MSFT_M"] + weights["NVDA_M"]
+    assert mega_total <= 0.450001, f"Mega-cap basket exposure exceeded 45%: {mega_total}"
+    assert "megacap_basket" in optimizer.last_diagnostics.get("binding_constraints", [])
+    assert abs(optimizer.last_diagnostics.get("megacap_basket_weight", 0.0) - mega_total) < 1e-4
+
+    # Relative weights between equal mega-caps should remain identical
+    assert abs(weights["AAPL_M"] - weights["MSFT_M"]) < 1e-4
+    # Mid-caps should still receive their allocations
+    assert weights["MID_A"] > 0.0
+    assert weights["MID_B"] > 0.0
+

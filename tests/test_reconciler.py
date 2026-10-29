@@ -331,4 +331,50 @@ def test_transaction_cooldown_suppression():
     assert alloc_map["BUY_ELIGIBLE"].order_shares == 40.0
 
 
+def test_hard_position_ceiling_overrides_hold_drift_tolerance():
+    """
+    Verifies that when an EQUAL_WEIGHT holding drifts above the hard concentration
+    ceiling (e.g. 15.0%), the hold_drift_tolerance (100%) is bypassed and an
+    immediate stepped trim (FORCED_CEILING_TRIM_STEP) is generated.
+    """
+    reconciler = PortfolioReconciler(
+        relative_threshold=0.20,
+        hold_drift_tolerance=1.00,
+        min_dollar_trade=1500.0,
+        max_position_weight=0.15,
+        stepping_enabled=True,
+        rebalance_step_factor=0.50,
+        max_trade_dollar_cap=6000.0,
+    )
+
+    total_value = 100000.0
+    # Current value = $16,500 (16.5% > 15.0% hard ceiling)
+    # Target value = $10,000 (10.0%)
+    # Under 100% hold drift tolerance, delta -$6,500 would have been protected
+    # But because 16.5% > 15.0%, it MUST trigger a forced trim.
+    holdings = {
+        "BIG_WINNER": Holding("BIG_WINNER", "Big Winner Inc", quantity=165.0, last_price=100.0, current_value=16500.0),
+    }
+    target_weights = {"BIG_WINNER": 0.10}
+    realtime_prices = {"BIG_WINNER": 100.0}
+    signals = {"BIG_WINNER": SignalType.EQUAL_WEIGHT}
+    clusters = {1: ["BIG_WINNER"]}
+
+    allocations = reconciler.reconcile(
+        total_portfolio_value=total_value,
+        current_holdings=holdings,
+        target_weights=target_weights,
+        realtime_prices=realtime_prices,
+        signals=signals,
+        clusters=clusters,
+    )
+
+    alloc = allocations[0]
+    assert alloc.action == "SELL"
+    # Delta is -$6,500; step factor 0.50 -> $3,250 / $100 = 32.5 -> 32 shares
+    assert alloc.order_shares == 32.0
+    assert "FORCED_CEILING_TRIM_STEP" in alloc.reason
+
+
+
 
