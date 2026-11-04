@@ -214,3 +214,56 @@ def test_get_latest_settled_trade_date():
         assert settled == "2026-09-15"
 
 
+def test_yfinance_get_news_rss_and_search_patch():
+    import yfinance as yf
+
+    rss_xml = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0"><channel>
+      <item>
+        <title>Deckers (DECK) Just Flashed Golden Cross Signal</title>
+        <link>https://finance.yahoo.com/articles/deck-1.html?.tsrc=rss</link>
+        <description>DECK crossed above the 20-day moving average.</description>
+        <guid isPermaLink="false">uuid-1</guid>
+        <pubDate>Tue, 03 Nov 2026 13:35:01 +0000</pubDate>
+      </item>
+    </channel></rss>"""
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = rss_xml
+
+    mock_search = MagicMock()
+    mock_search.news = [
+        {
+            "uuid": "uuid-1",
+            "title": "Deckers (DECK) Just Flashed Golden Cross Signal",
+            "publisher": "Zacks",
+            "link": "https://finance.yahoo.com/articles/deck-1.html",
+            "providerPublishTime": 1793712901,
+            "relatedTickers": ["DECK"],
+        },
+        {
+            "uuid": "uuid-2",
+            "title": "Extra Search Story on DECK",
+            "publisher": "Investing.com",
+            "link": "https://finance.yahoo.com/articles/deck-2.html",
+            "providerPublishTime": 1793710000,
+            "relatedTickers": ["DECK"],
+        },
+    ]
+
+    ticker_obj = yf.Ticker("DECK")
+    with patch("yfinance.Search", return_value=mock_search), patch.object(
+        ticker_obj._data, "cache_get", return_value=mock_resp
+    ):
+        news = ticker_obj.get_news(count=10)
+
+    assert len(news) == 2
+    assert news[0]["uuid"] == "uuid-1"
+    assert news[0]["publisher"] == "Zacks"
+    assert news[0]["summary"] == "DECK crossed above the 20-day moving average."
+    assert news[0]["link"] == "https://finance.yahoo.com/articles/deck-1.html"
+    assert news[1]["uuid"] == "uuid-2"
+
+
+

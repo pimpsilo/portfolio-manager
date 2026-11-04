@@ -60,6 +60,147 @@ try:
 except Exception:
     pass
 
+
+def _patch_yfinance_get_news() -> None:
+    """
+    Workaround for Yahoo Finance retiring `/xhr/ncp` (HTTP 404), which causes
+    `yfinance.Ticker.get_news()` to raise `YFDataException('*** YAHOO! FINANCE IS CURRENTLY DOWN! ***')`.
+    Replaces `TickerBase.get_news` with Yahoo Finance's active ticker RSS feed
+    (`feeds.finance.yahoo.com/rss/2.0/headline`) enriched with `yf.Search` metadata.
+    """
+    try:
+        from email.utils import parsedate_to_datetime
+        import xml.etree.ElementTree as ET
+        import yfinance as yf
+        from yfinance.base import TickerBase
+
+        if getattr(TickerBase.get_news, "_pm_patched", False):
+            return
+
+        _orig_get_news = TickerBase.get_news
+
+        def _get_news_patched(self, count: int = 10, tab: str = "news") -> list:
+            if getattr(self, "_news", None):
+                return self._news
+
+            symbol = str(getattr(self, "ticker", "") or "").strip()
+            if not symbol:
+                return []
+
+            articles: list = []
+            seen_keys: set = set()
+            publisher_by_uuid: dict = {}
+            publisher_by_title: dict = {}
+            search_articles: list = []
+
+            # 1. Fetch from Yahoo Finance v1/finance/search for publisher metadata & fallback
+            try:
+                search_res = yf.Search(
+                    query=symbol,
+                    news_count=max(int(count or 10), 20),
+                    enable_fuzzy_query=False,
+                    raise_errors=False,
+                )
+                search_articles = list(getattr(search_res, "news", None) or [])
+                for item in search_articles:
+                    uuid_val = item.get("uuid")
+                    title_val = (item.get("title") or "").strip()
+                    pub_val = item.get("publisher")
+                    if pub_val:
+                        if uuid_val:
+                            publisher_by_uuid[uuid_val] = pub_val
+                        if title_val:
+                            publisher_by_title[title_val.lower()] = pub_val
+            except Exception:
+                pass
+
+            # 2. Fetch ticker-specific articles + summaries from Yahoo Finance's RSS headline feed
+            try:
+                rss_url = "https://feeds.finance.yahoo.com/rss/2.0/headline"
+                resp = self._data.cache_get(
+                    url=rss_url,
+                    params={"s": symbol, "region": "US", "lang": "en-US"},
+                    timeout=15,
+                )
+                if resp is not None and getattr(resp, "status_code", 0) == 200 and resp.text:
+                    root = ET.fromstring(resp.text)
+                    for item in root.findall(".//item"):
+                        title = (item.findtext("title") or "").strip()
+                        if not title:
+                            continue
+                        guid = (item.findtext("guid") or "").strip()
+                        link = (item.findtext("link") or "").strip()
+                        if link.endswith("?.tsrc=rss"):
+                            link = link[: -len("?.tsrc=rss")]
+                        desc = (item.findtext("description") or "").strip()
+                        pub_str = (item.findtext("pubDate") or "").strip()
+
+                        pub_ts = None
+                        if pub_str:
+                            try:
+                                dt = parsedate_to_datetime(pub_str)
+                                pub_ts = int(dt.timestamp())
+                            except Exception:
+                                pub_ts = None
+
+                        publisher = (
+                            publisher_by_uuid.get(guid)
+                            or publisher_by_title.get(title.lower())
+                            or "Yahoo Finance"
+                        )
+                        dedup_key = guid or title.lower()
+                        if dedup_key in seen_keys:
+                            continue
+                        seen_keys.add(dedup_key)
+                        seen_keys.add(title.lower())
+
+                        entry = {
+                            "uuid": guid,
+                            "title": title,
+                            "summary": desc,
+                            "publisher": publisher,
+                            "link": link,
+                            "type": "STORY",
+                            "relatedTickers": [symbol.upper()],
+                        }
+                        if pub_ts is not None:
+                            entry["providerPublishTime"] = pub_ts
+                        articles.append(entry)
+            except Exception:
+                pass
+
+            # 3. Supplement with symbol-matched Search articles not already in RSS
+            sym_upper = symbol.upper()
+            for item in search_articles:
+                related = [str(t).upper() for t in (item.get("relatedTickers") or [])]
+                if sym_upper not in related:
+                    continue
+                uuid_val = item.get("uuid") or ""
+                title_val = (item.get("title") or "").strip()
+                if (uuid_val and uuid_val in seen_keys) or (title_val and title_val.lower() in seen_keys):
+                    continue
+                if uuid_val:
+                    seen_keys.add(uuid_val)
+                if title_val:
+                    seen_keys.add(title_val.lower())
+                articles.append(item)
+
+            if articles:
+                limit = int(count) if count and count > 0 else len(articles)
+                self._news = articles[:limit]
+                return self._news
+
+            # 4. Last-resort fallback to original yfinance implementation
+            return _orig_get_news(self, count=count, tab=tab)
+
+        _get_news_patched._pm_patched = True
+        TickerBase.get_news = _get_news_patched
+    except Exception:
+        pass
+
+
+_patch_yfinance_get_news()
+
 import warnings
 warnings.filterwarnings("ignore", message=".*is not a valid FinishReason.*")
 

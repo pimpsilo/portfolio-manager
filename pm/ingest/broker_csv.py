@@ -108,8 +108,13 @@ class BrokerCSVParser:
                     cash_balance += cash_val
                     continue
 
-                # Filter uninvestable rows
-                if not clean_sym or clean_sym in ("PENDING ACTIVITY", "ACCOUNT TOTAL"):
+                # Filter uninvestable rows (summary labels, 9-digit plan CUSIPs, option contracts)
+                if (
+                    not clean_sym
+                    or clean_sym in ("PENDING ACTIVITY", "ACCOUNT TOTAL")
+                    or clean_sym.isdigit()
+                    or clean_sym.startswith("-")
+                ):
                     continue
 
                 qty = self._clean_float(row_dict.get("Quantity", "0"))

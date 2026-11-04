@@ -359,7 +359,13 @@ class PortfolioManagerEngine:
                 + ", ".join(sorted(missing_held_prices))
             )
         market_caps = self.market_data.fetch_market_caps(sorted_universe)
-        market_cap_sources = dict(getattr(self.market_data, "market_cap_sources", {}))
+        raw_cap_sources = getattr(self.market_data, "market_cap_sources", {})
+        market_cap_sources = {
+            ticker: raw_cap_sources.get(
+                ticker, "YFINANCE" if market_caps.get(ticker, 0.0) > 0 else "UNKNOWN"
+            )
+            for ticker in sorted_universe
+        }
         unknown_market_caps = sorted(
             ticker for ticker, source in market_cap_sources.items() if source == "UNKNOWN"
         )

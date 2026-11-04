@@ -25,6 +25,18 @@ def test_unknown_market_cap_is_neutral_and_visible():
     assert service.market_cap_sources["UNKNOWN"] == "UNKNOWN"
 
 
+def test_market_cap_sources_do_not_leak_across_watcher_runs():
+    service = MarketDataService()
+
+    with patch("pm.market_data.pricing.yf.Tickers", side_effect=RuntimeError("offline")):
+        service.fetch_market_caps(["856917737", "AAPL"])
+        assert service.market_cap_sources.get("856917737") == "UNKNOWN"
+
+        service.fetch_market_caps(["AAPL"])
+        assert "856917737" not in service.market_cap_sources
+        assert service.market_cap_sources == {"AAPL": "STATIC_FALLBACK"}
+
+
 def test_market_cap_tier_boundaries_are_explicit():
     optimizer = PortfolioConstraintOptimizer(
         market_cap_cfg={

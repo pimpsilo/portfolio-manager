@@ -49,6 +49,23 @@ def test_broker_csv_download_time_footer():
     assert state.source_file == Path(f_path).name
 
 
+def test_broker_csv_ignores_plan_cusips_and_options():
+    sample_csv = """Account number,Account name,Symbol,Description,Quantity,Last price,Last price change,Current value,Cost basis total
+74891,GE VERNOVA RETIREMENT SAVINGS PLAN,856917737,SS S&P 500 INDEX X,23431.468,$13.489,-$0.249,$316067.07,$294744.67
+653586102,BrokerageLink,FDRXX**,HELD IN MONEY MARKET,,,,$50000.00,
+653586102,BrokerageLink,AAPL,APPLE INC,10,$300.00,+$2.00,$3000.00,$2500.00
+653586102,BrokerageLink, -NFLX261120C75,NFLX NOV 20 2026 $75 CALL,-4,$0.08,$0.00,-$32.00,$705.35
+"""
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".csv") as f:
+        f.write(sample_csv)
+        f_path = f.name
+
+    parser = BrokerCSVParser()
+    state = parser.parse(f_path)
+    assert list(state.holdings.keys()) == ["AAPL"]
+    assert state.total_account_value == 53000.0
+
+
 def test_broker_csv_rejects_file_without_portfolio_rows():
     sample_csv = '"Account number","Symbol","Description","Quantity","Last price","Current value"\n'
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".csv") as f:

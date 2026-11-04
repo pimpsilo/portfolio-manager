@@ -46,10 +46,12 @@ class MarketDataService:
         Falls back to provided fallback_prices if a quote fails.
         """
         if not tickers:
+            self.price_sources = {}
             return {}
 
         fallback_prices = fallback_prices or {}
         results: Dict[str, float] = {}
+        self.price_sources = {}
 
         unique_tickers = list(sorted(set(tickers)))
         logger.info(f"Fetching real-time market prices for {len(unique_tickers)} tickers via yfinance...")
@@ -96,9 +98,11 @@ class MarketDataService:
         Retrieves market capitalization for tickers via yfinance, with institutional fallbacks.
         """
         if not tickers:
+            self.market_cap_sources = {}
             return {}
 
         results: Dict[str, float] = {}
+        self.market_cap_sources = {}
         unique_tickers = list(sorted(set(tickers)))
 
         try:
