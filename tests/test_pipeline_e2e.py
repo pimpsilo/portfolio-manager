@@ -21,6 +21,7 @@ def e2e_config(tmp_path):
             "reports_dir": str(reports_dir),
             "downloads_dir": str(downloads_dir),
             "obsidian_vault_dir": str(reports_dir),
+            "trade_history_file": str(tmp_path / "trade_history.json"),
         },
         "signals": {
             "max_age_days": 14,

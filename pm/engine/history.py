@@ -383,6 +383,15 @@ class TransactionHistoryTracker:
                     except (KeyError, ValueError):
                         continue
                     if t_date <= target_date:
+                        source = item.get("source", "LEDGER")
+                        # Do not treat same-day unexecuted order recommendations (VAULT_REPORT)
+                        # as a cooldown lock on same-day re-runs unless explicitly requested.
+                        if (
+                            source == "VAULT_REPORT"
+                            and t_date == target_date
+                            and not include_as_of_date_vault_orders
+                        ):
+                            continue
                         existing = merged.get(ticker)
                         if existing is None or t_date > existing.trade_date:
                             merged[ticker] = TransactionRecord(
@@ -390,7 +399,7 @@ class TransactionHistoryTracker:
                                 trade_date=t_date,
                                 action=item.get("action", "BUY"),
                                 shares=float(item.get("shares", 0.0)),
-                                source=item.get("source", "LEDGER"),
+                                source=source,
                             )
 
         # 2. Merge with vault reports on disk

@@ -312,3 +312,40 @@ def test_record_trade_directives_in_ledger(tmp_path: Path):
     # HOLD was not recorded as an active trade
     assert "AAPL" not in ledger["transactions"]
 
+
+def test_same_day_vault_report_not_self_suppressing(tmp_path: Path):
+    from unittest.mock import MagicMock
+
+    ledger_file = tmp_path / "trade_history.json"
+    tracker = TransactionHistoryTracker(history_file=str(ledger_file))
+    today = date(2026, 11, 6)
+
+    # 1. Simulate an earlier run today recording a trade directive
+    order_nvda = MagicMock(action="BUY", order_shares=15.0, ticker="NVDA")
+    tracker.record_trade_directives([order_nvda], exec_date=today)
+
+    # Also add a confirmed BROKER_CSV trade today for AAPL
+    ledger = tracker.load_ledger()
+    ledger["transactions"].setdefault("AAPL", []).append({
+        "trade_date": today.isoformat(),
+        "action": "BUY",
+        "shares": 10.0,
+        "source": "BROKER_CSV",
+    })
+    tracker.save_ledger(ledger)
+
+    # 2. Re-run on the same day without include_as_of_date_vault_orders
+    txs = tracker.get_last_transactions(as_of_date=today, include_as_of_date_vault_orders=False)
+
+    # NVDA (VAULT_REPORT today) should NOT be in txs, preventing self-suppression
+    assert "NVDA" not in txs
+
+    # AAPL (BROKER_CSV today) MUST be in txs because it's a confirmed broker trade
+    assert "AAPL" in txs
+    assert txs["AAPL"].source == "BROKER_CSV"
+
+    # If include_as_of_date_vault_orders is explicitly True, NVDA should be included
+    txs_inclusive = tracker.get_last_transactions(as_of_date=today, include_as_of_date_vault_orders=True)
+    assert "NVDA" in txs_inclusive
+    assert txs_inclusive["NVDA"].source == "VAULT_REPORT"
+
